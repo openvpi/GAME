@@ -93,7 +93,7 @@ class SyllablesLightningModule(BaseLightningModule):
             similarities: torch.Tensor, durations: torch.Tensor,
             title=None
     ):
-        similarities = similarities.clamp_min(0).cpu().numpy()
+        similarities = similarities.cpu().numpy()
         durations = durations.cpu().numpy()
         logger: TensorBoardLogger = self.logger
         logger.experiment.add_figure(f"regions/regions_{idx}", similarity_to_figure(

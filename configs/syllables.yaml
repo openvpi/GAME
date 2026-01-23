@@ -1,6 +1,5 @@
 bases: [
   "configs/base.yaml",
-  "configs/muon.yaml",
 ]
 
 binarizer:
@@ -22,7 +21,7 @@ model:
   num_languages: 127
   backbone_out_channels: 128
   cosine_similarity_channels: 8
-  backbone_class: ""
+  backbone_class: "modules.syllable_splitter.TestBackbone"
   backbone_kwargs: {}
 
 training:
@@ -43,19 +42,19 @@ training:
     boundary_loss:
       bidirectional: false
   dataloader:
-    max_batch_frames: 20000
-    max_batch_size: 32
+    max_batch_frames: 50000
+    max_batch_size: 64
     max_val_batch_frames: 10000
     max_val_batch_size: 1
     frame_count_grid: 6
     num_workers: 4
     prefetch_factor: 2
-#  optimizer:
-#    cls: torch.optim.AdamW
-#    kwargs:
-#      lr: 0.0006
-#      betas: [0.9, 0.98]
-#      weight_decay: 0
+  optimizer:
+    cls: torch.optim.AdamW
+    kwargs:
+      lr: 0.0006
+      betas: [0.9, 0.98]
+      weight_decay: 0
   lr_scheduler:
     cls: torch.optim.lr_scheduler.StepLR
     kwargs:
@@ -85,7 +84,7 @@ training:
         since_m_units: 0
         save_last_k: 2
         weights_only: false
-    precision: "16-mixed"
+    precision: "bf16-mixed"
     accelerator: "auto"
     devices: "auto"
     num_nodes: 1
