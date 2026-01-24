@@ -50,7 +50,6 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         if len(self.losses) == 0:
             raise ValueError("No losses defined.")
         self.freeze_parameters()  # caution: this can break when resuming training
-        self.print_arch()
 
         self.use_ema = self.training_config.weight_averaging.ema_enabled
         if self.use_ema:
@@ -61,7 +60,6 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.train_dataset: BaseDataset = None
         self.valid_dataset: BaseDataset = None
         self.train_sampler: DynamicBatchSampler = None
-        self.valid_sampler: DynamicBatchSampler = None
 
         self.logger_step = -1  # when accumulate_grad_batches > 1, this helps to avoid redundant logging
 
@@ -105,11 +103,6 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         :param outputs: the model outputs returned by `self.forward_model(sample, infer=True)` directly.
         """
         pass
-
-    def print_arch(self):
-        rank_zero_info(f"Model: {self.model}")
-        rank_zero_info(f"Losses: {self.losses}")
-        rank_zero_info(f"Metrics: {self.metrics}")
 
     def freeze_parameters(self):
         if not self.training_config.finetuning.freezing_enabled:

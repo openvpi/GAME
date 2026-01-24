@@ -2,31 +2,10 @@ from torch import nn
 
 from lib.config.schema import ModelConfig
 from lib.reflection import build_object_from_class_name
-from modules.aux_decoder import ConvNeXtDecoder
 from modules.commons.common_layers import (
     NormalInitEmbedding as Embedding,
     XavierUniformInitLinear as Linear
 )
-
-
-class TestBackbone(nn.Module):
-    def __init__(self, in_channels, cosine_similarity_channels, **kwargs):
-        super().__init__()
-        self.net = ConvNeXtDecoder(
-            in_channels, 256,
-            num_layers=6, num_channels=512
-        )
-        self.region_projection = Linear(256, cosine_similarity_channels)
-        self.boundary_projection = nn.Sequential(
-            ConvNeXtDecoder(256, 1, num_layers=2, num_channels=256),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        x = self.net(x)
-        features = self.region_projection(x)
-        boundaries = self.boundary_projection(x).squeeze(-1)
-        return features, boundaries
 
 
 class SyllableSplitter(nn.Module):
@@ -43,5 +22,5 @@ class SyllableSplitter(nn.Module):
 
     def forward(self, spectrogram, language):
         x = self.language_embedding(language.unsqueeze(-1)) + self.spectrogram_projection(spectrogram)
-        features = self.backbone(x)
-        return features
+        features, boundaries = self.backbone(x)
+        return features, boundaries

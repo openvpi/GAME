@@ -21,8 +21,18 @@ model:
   num_languages: 127
   backbone_out_channels: 128
   cosine_similarity_channels: 8
-  backbone_class: "modules.syllable_splitter.TestBackbone"
-  backbone_kwargs: {}
+  backbone_class: "modules.conformer.Gconform.Gmidi_conform"
+  backbone_kwargs:
+    attention_drop: 0.1
+    attention_heads: 8
+    attention_heads_dim: 64
+    conv_drop: 0.1
+    dim: 256
+    ffn_latent_drop: 0.1
+    ffn_out_drop: 0.1
+    kernel_size: 31
+    lay: 6
+    use_lay_skip: true
 
 training:
   augmentation:
@@ -42,8 +52,8 @@ training:
     boundary_loss:
       bidirectional: false
   dataloader:
-    max_batch_frames: 50000
-    max_batch_size: 64
+    max_batch_frames: 30000
+    max_batch_size: 32
     max_val_batch_frames: 10000
     max_val_batch_size: 1
     frame_count_grid: 6
