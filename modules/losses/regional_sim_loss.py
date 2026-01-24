@@ -1,13 +1,8 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
-
-def self_cosine_similarity(x: Tensor) -> Tensor:
-    x_norm = F.normalize(x.float(), p=2, dim=-1, eps=1e-8)
-    sim = x_norm @ x_norm.transpose(-1, -2)
-    return sim
+from lib.functional import self_cosine_similarity
 
 
 class RegionalCosineSimilarityLoss(nn.Module):

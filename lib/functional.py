@@ -1,5 +1,7 @@
 import numpy
 import torch
+import torch.nn.functional as F
+from torch import Tensor
 
 
 @torch.no_grad()
@@ -91,3 +93,12 @@ def resize_curve(curve: numpy.ndarray, target_length: int):
     target_indices = numpy.linspace(0, original_length - 1, num=target_length)
     interpolated_curve = numpy.interp(target_indices, original_indices, curve).astype(curve.dtype)
     return interpolated_curve
+
+
+def self_cosine_similarity(x: Tensor) -> Tensor:
+    """
+    [..., T, C] -> [..., T, T]
+    """
+    x_norm = F.normalize(x.float(), p=2, dim=-1, eps=1e-8)
+    sim = x_norm @ x_norm.transpose(-1, -2)
+    return sim

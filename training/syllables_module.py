@@ -2,6 +2,7 @@ import torch
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch import nn
 
+from lib.functional import self_cosine_similarity
 from lib.plot import similarity_to_figure, boundary_to_figure
 from modules.losses import (
     BoundaryEarthMoversDistanceLoss,
@@ -21,10 +22,6 @@ class SyllablesLightningModule(BaseLightningModule):
 
     def build_model(self) -> nn.Module:
         return SyllableSplitter(self.model_config)
-
-    # noinspection PyAttributeOutsideInit
-    def post_init(self) -> None:
-        self.cosine_similarity = nn.CosineSimilarity(dim=-1)
 
     def register_losses_and_metrics(self) -> None:
         self.register_loss("region_loss", RegionalCosineSimilarityLoss(
@@ -48,9 +45,7 @@ class SyllablesLightningModule(BaseLightningModule):
 
         features, boundaries = self.model(spectrogram, language_ids)  # [B, T, T]
         if infer:
-            similarities = self.cosine_similarity(
-                features.unsqueeze(2), features.unsqueeze(1)
-            )  # [B, T, T]
+            similarities = self_cosine_similarity(features)  # [B, T, T]
             return {
                 "similarities": similarities,
                 "boundaries": boundaries,
