@@ -31,7 +31,7 @@ model:
     ffn_latent_drop: 0.1
     ffn_out_drop: 0.1
     kernel_size: 31
-    lay: 6
+    lay: 8
     use_lay_skip: true
 
 training:
