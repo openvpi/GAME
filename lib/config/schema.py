@@ -77,8 +77,6 @@ class ModelConfig(ConfigBaseModel):
     in_channels: int = Field(None, json_schema_extra={
         "dynamic_expr": ref("binarizer.features.spectrogram.num_bins")
     })
-    backbone_out_channels: int = Field(128)
-    cosine_similarity_channels: int = Field(16)
     backbone_class: str = Field(...)
     backbone_kwargs: dict[str, Any] = Field(...)
 
@@ -117,6 +115,7 @@ class AugmentationConfig(ConfigBaseModel):
 
 class RegionLossConfig(ConfigBaseModel):
     neighborhood_size: int = Field(5, ge=1)
+    exponential_decay: bool = Field(False)
 
 
 class BoundaryLossConfig(ConfigBaseModel):

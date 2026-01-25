@@ -19,20 +19,16 @@ binarizer:
 
 model:
   num_languages: 127
-  backbone_out_channels: 128
-  cosine_similarity_channels: 8
-  backbone_class: "modules.conformer.Gconform.Gmidi_conform"
+  backbone_class: "modules.backbones.EBF.EBFBackbone"
   backbone_kwargs:
-    attention_drop: 0.1
-    attention_heads: 8
-    attention_heads_dim: 64
-    conv_drop: 0.1
     dim: 256
-    ffn_latent_drop: 0.1
-    ffn_out_drop: 0.1
-    kernel_size: 31
-    lay: 8
-    use_lay_skip: true
+    num_layers: 8
+    sim_cut_layer_idx: 6
+    sim_dim: 16
+    num_heads: 8
+    head_dim: 64
+    c_kernel_size: 31
+    m_kernel_size: 31
 
 training:
   augmentation:

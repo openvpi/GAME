@@ -5,7 +5,7 @@ from einops import rearrange
 from torch import nn
 import torch.nn.functional as F
 
-from modules.RoPosEmb_s2 import SingleRoPosEmb
+from modules.backbones.RoPosEmb_s2 import SingleRoPosEmb
 
 
 class LayScale(nn.Module):
@@ -80,13 +80,15 @@ class FFN(nn.Module):
 
 
 class CgMLP(nn.Module):
-    def __init__(self, dim: int,
-                 kernel_size: int = 31,
-                 out_drop=0.1,
-                 latent_drop=0.0,
-                 bias: bool = True,
-                 use_dw_act=True,
-                 latent_dim: Optional[int] = None):
+    def __init__(
+            self, dim: int,
+            kernel_size: int = 31,
+            out_drop=0.1,
+            latent_drop=0.0,
+            bias: bool = True,
+            use_dw_act=True,
+            latent_dim: Optional[int] = None
+    ):
         super().__init__()
         if latent_dim is None:
             latent_dim = dim
@@ -96,21 +98,26 @@ class CgMLP(nn.Module):
             kernel_size=1,
             stride=1,
             padding=0,
-            bias=bias)
+            bias=bias
+        )
         self.use_dw_act = use_dw_act
         self.norm = RMSnorm(latent_dim)
         padding = (kernel_size - 1) // 2
-        self.dw = nn.Conv1d(latent_dim, latent_dim, kernel_size,
-                            stride=1,
-                            padding=padding,
-                            groups=latent_dim,
-                            bias=bias)
-        self.pw2 = nn.Conv1d(latent_dim,
-                             dim,
-                             kernel_size=1,
-                             stride=1,
-                             padding=0,
-                             bias=bias)
+        self.dw = nn.Conv1d(
+            latent_dim, latent_dim, kernel_size,
+            stride=1,
+            padding=padding,
+            groups=latent_dim,
+            bias=bias
+        )
+        self.pw2 = nn.Conv1d(
+            latent_dim,
+            dim,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            bias=bias
+        )
         self.out_drop = nn.Dropout(out_drop) if out_drop > 0. else nn.Identity()
         self.latent_drop = nn.Dropout(latent_drop) if latent_drop > 0. else nn.Identity()
 
@@ -130,8 +137,12 @@ class CgMLP(nn.Module):
 
 
 class AttnWROPEX(nn.Module):
-    def __init__(self, dim, num_heads, head_dim, use_rope=True, rope_cache=True, dropout_attn: float = 0.0,
-                 out_drop: float = 0.0):
+    def __init__(
+            self, dim, num_heads, head_dim,
+            use_rope=True, rope_cache=True,
+            dropout_attn: float = 0.0,
+            out_drop: float = 0.0
+    ):
         super().__init__()
 
         self.num_heads = num_heads
@@ -161,32 +172,44 @@ class AttnWROPEX(nn.Module):
             k = self.rope(k)
 
         with torch.backends.cuda.sdp_kernel():
-            out = F.scaled_dot_product_attention(q, k, v, dropout_p=self.dropout_attn,
-                                                 )
+            out = F.scaled_dot_product_attention(
+                q, k, v,
+                dropout_p=self.dropout_attn,
+            )
 
         out = rearrange(out, "b h t c -> b t (h c) ", h=self.num_heads, )
-
         out = self.out_linear(out)
         out = self.out_drop(out)
         return out
 
 
 class PAC(nn.Module):
-    def __init__(self, dim, num_heads, head_dim, c_kernel_size=31, m_kernel_size=31, use_rope=True, rope_cache=True,
-                 dropout_attn: float = 0.0, out_drop: float = 0.0, c_out_drop=0.1,
-                 c_latent_drop=0.0, ):
+    def __init__(
+            self, dim, num_heads, head_dim,
+            c_kernel_size=31, m_kernel_size=31, use_rope=True, rope_cache=True,
+            dropout_attn: float = 0.0, out_drop: float = 0.0, c_out_drop=0.1,
+            c_latent_drop=0.0,
+    ):
         super().__init__()
         self.attn = AttnWROPEX(dim, num_heads, head_dim, use_rope, rope_cache, dropout_attn, out_drop)
-        self.c = CgMLP(dim, kernel_size=c_kernel_size,
-                       latent_drop=c_latent_drop, out_drop=c_out_drop)
+        self.c = CgMLP(
+            dim, kernel_size=c_kernel_size,
+            latent_drop=c_latent_drop, out_drop=c_out_drop
+        )
 
         self.a_norm = RMSnorm(dim)
         self.c_norm = RMSnorm(dim)
 
         self.merge_linear = nn.Linear(dim * 2, dim)
-        self.merge_dw_conv = nn.Conv1d(dim * 2, dim * 2, kernel_size=m_kernel_size, stride=1,
-                                       padding=m_kernel_size // 2,
-                                       groups=dim * 2) if m_kernel_size != 0 else None
+        self.merge_dw_conv = (
+            nn.Conv1d(
+                dim * 2, dim * 2, kernel_size=m_kernel_size, stride=1,
+                padding=m_kernel_size // 2,
+                groups=dim * 2
+            )
+            if m_kernel_size != 0 else
+            None
+        )
 
     def forward(self, x):
         a_o = self.attn(self.a_norm(x))
@@ -200,47 +223,64 @@ class PAC(nn.Module):
 
 
 class EBF(nn.Module):
-    def __init__(self, dim, num_heads, head_dim, c_kernel_size=31, m_kernel_size=31, use_rope=True, rope_cache=True,
-                 dropout_attn: float = 0.0, out_drop: float = 0.0, c_out_drop=0.1,
-                 c_latent_drop=0.0, use_ls=True, ffn_type='glu', ffn_latent_drop=0.1, ffn_out_drop=0.1):
+    def __init__(
+            self, dim, num_heads, head_dim,
+            c_kernel_size=31, m_kernel_size=31, use_rope=True, rope_cache=True,
+            dropout_attn: float = 0.0, out_drop: float = 0.0, c_out_drop=0.1,
+            c_latent_drop=0.0, use_ls=True, ffn_type='glu', ffn_latent_drop=0.1, ffn_out_drop=0.1
+    ):
         super().__init__()
-        self.ffn1 = GLUFFN(dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
-                           dropout_output=ffn_out_drop) if ffn_type == 'glu' else FFN(dim, latent_dim=dim * 4,
-                                                                                      dropout_latent=ffn_latent_drop,
-                                                                                      dropout_output=ffn_out_drop)
-        self.ffn2 = GLUFFN(dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
-                           dropout_output=ffn_out_drop) if ffn_type == 'glu' else FFN(dim, latent_dim=dim * 4,
-                                                                                      dropout_latent=ffn_latent_drop,
-                                                                                      dropout_output=ffn_out_drop)
-        self.attn = PAC(dim, num_heads, head_dim, c_kernel_size, m_kernel_size, use_rope, rope_cache, dropout_attn,
-                        out_drop, c_out_drop, c_latent_drop)
+        self.ffn1 = (
+            GLUFFN(
+                dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
+                dropout_output=ffn_out_drop
+            )
+            if ffn_type == 'glu' else
+            FFN(
+                dim, latent_dim=dim * 4,
+                dropout_latent=ffn_latent_drop,
+                dropout_output=ffn_out_drop
+            )
+        )
+        self.ffn2 = (
+            GLUFFN(
+                dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
+                dropout_output=ffn_out_drop
+            )
+            if ffn_type == 'glu'
+            else FFN(
+                dim, latent_dim=dim * 4,
+                dropout_latent=ffn_latent_drop,
+                dropout_output=ffn_out_drop
+            )
+        )
+        self.attn = PAC(
+            dim, num_heads, head_dim, c_kernel_size, m_kernel_size, use_rope, rope_cache, dropout_attn,
+            out_drop, c_out_drop, c_latent_drop
+        )
 
-        self.norm1=RMSnorm(dim)
-        self.norm2=RMSnorm(dim)
-
+        self.norm1 = RMSnorm(dim)
+        self.norm2 = RMSnorm(dim)
 
         if use_ls:
-            self.lay_scale1=LayScale(dim)
-            self.lay_scale2=LayScale(dim)
-            self.lay_scale3=LayScale(dim)
+            self.lay_scale1 = LayScale(dim)
+            self.lay_scale2 = LayScale(dim)
+            self.lay_scale3 = LayScale(dim)
         else:
-            self.lay_scale1=nn.Identity()
-            self.lay_scale2=nn.Identity()
-            self.lay_scale3=nn.Identity()
+            self.lay_scale1 = nn.Identity()
+            self.lay_scale2 = nn.Identity()
+            self.lay_scale3 = nn.Identity()
 
-
-
-
-    def forward(self,x,mask=None):
+    def forward(self, x, mask=None):
         if mask is not None:
             x = x.masked_fill(~mask.unsqueeze(-1), 0)
-        x=self.lay_scale1(self.ffn1(self.norm1(x)))*0.5+x
+        x = self.lay_scale1(self.ffn1(self.norm1(x))) * 0.5 + x
         if mask is not None:
             x = x.masked_fill(~mask.unsqueeze(-1), 0)
-        x=self.lay_scale2(self.attn(x))+x
+        x = self.lay_scale2(self.attn(x)) + x
         if mask is not None:
             x = x.masked_fill(~mask.unsqueeze(-1), 0)
-        x=self.lay_scale3(self.ffn2(self.norm2(x)))*0.5+x
+        x = self.lay_scale3(self.ffn2(self.norm2(x))) * 0.5 + x
         if mask is not None:
             x = x.masked_fill(~mask.unsqueeze(-1), 0)
         return x
@@ -250,31 +290,38 @@ class EBFBackbone(nn.Module):
     """
     完整的EBF Backbone，符合SyllableSplitter接口规范
     
-    输入: x [B, T, indim]
-    输出: features [B, T, outdim], boundaries [B, T]
+    输入: x [B, T, in_dim]
+    输出: features [B, T, sim_dim], boundaries [B, T]
     """
-    def __init__(self, indim: int, outdim: int, 
-                 dim: int = 256, 
-                 num_layers: int = 8,
-                 num_heads: int = 8, 
-                 head_dim: int = 64,
-                 c_kernel_size: int = 31, 
-                 m_kernel_size: int = 31, 
-                 use_rope: bool = True, 
-                 rope_cache: bool = True,
-                 dropout_attn: float = 0.0, 
-                 out_drop: float = 0.0, 
-                 c_out_drop: float = 0.1,
-                 c_latent_drop: float = 0.0, 
-                 use_ls: bool = True, 
-                 ffn_type: str = 'glu', 
-                 ffn_latent_drop: float = 0.1, 
-                 ffn_out_drop: float = 0.1):
+
+    def __init__(
+            self, in_dim: int,
+            dim: int = 256,
+            num_layers: int = 8,
+            sim_cut_layer_idx: int = 6,
+            sim_dim: int = 16,
+            num_heads: int = 8,
+            head_dim: int = 64,
+            c_kernel_size: int = 31,
+            m_kernel_size: int = 31,
+            use_rope: bool = True,
+            rope_cache: bool = True,
+            dropout_attn: float = 0.0,
+            out_drop: float = 0.0,
+            c_out_drop: float = 0.1,
+            c_latent_drop: float = 0.0,
+            use_ls: bool = True,
+            ffn_type: str = 'glu',
+            ffn_latent_drop: float = 0.1,
+            ffn_out_drop: float = 0.1,
+    ):
         super().__init__()
-        
-        # 输入投影: indim -> dim
-        self.input_proj = nn.Linear(indim, dim)
-        
+        assert sim_cut_layer_idx <= num_layers
+        self.sim_cut_layer_idx = sim_cut_layer_idx
+
+        # 输入投影: in_dim -> dim
+        self.input_proj = nn.Linear(in_dim, dim)
+
         # EBF blocks堆叠
         self.layers = nn.ModuleList([
             EBF(dim=dim, num_heads=num_heads, head_dim=head_dim,
@@ -286,34 +333,34 @@ class EBFBackbone(nn.Module):
                 ffn_latent_drop=ffn_latent_drop, ffn_out_drop=ffn_out_drop)
             for _ in range(num_layers)
         ])
-        
+
         # 输出层
-        self.output_norm = RMSnorm(dim)
-        self.feature_head = nn.Linear(dim, outdim)  # -> [B, T, outdim]
-        self.boundary_head = nn.Linear(dim, 1)      # -> [B, T, 1]
-    
+        self.output_norm1 = RMSnorm(dim)
+        self.output_norm2 = RMSnorm(dim)
+        self.feature_head = nn.Linear(dim, sim_dim)  # -> [B, T, sim_dim]
+        self.boundary_head = nn.Linear(dim, 1)  # -> [B, T, 1]
+
     def forward(self, x, mask=None):
         """
         Args:
-            x: [B, T, indim] 输入特征 (Mel频谱)
+            x: [B, T, in_dim] 输入特征 (Mel频谱)
             mask: [B, T] 可选的mask
         Returns:
-            features: [B, T, outdim] 用于余弦相似度计算
+            features: [B, T, sim_dim] 用于余弦相似度计算
             boundaries: [B, T] 边界概率 (0~1)
         """
-        # 输入投影
         x = self.input_proj(x)
-        
-        # 通过所有EBF层
-        for layer in self.layers:
-            x = layer(x, mask=mask)
-        
-        # 输出归一化
-        x = self.output_norm(x)
-        
-        # 特征和边界预测
-        features = self.feature_head(x)  # [B, T, outdim]
-        boundaries = torch.sigmoid(self.boundary_head(x)).squeeze(-1)  # [B, T]
-        
-        return features, boundaries
 
+        for layer in self.layers[:self.sim_cut_layer_idx]:
+            x = layer(x, mask=mask)
+        x = self.output_norm1(x)
+
+        features = self.feature_head(x)  # [B, T, sim_dim]
+
+        for layer in self.layers[self.sim_cut_layer_idx:]:
+            x = layer(x, mask=mask)
+        x = self.output_norm2(x)
+
+        boundaries = self.boundary_head(x).squeeze(-1).sigmoid()  # [B, T]
+
+        return features, boundaries
