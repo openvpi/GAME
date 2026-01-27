@@ -2,15 +2,25 @@ import torch
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch import nn
 
-from lib.functional import self_cosine_similarity, distance_transform
-from lib.plot import similarity_to_figure, boundary_to_figure, distance_to_figure
+from lib.functional import self_cosine_similarity, distance_transform, decode_boundaries_from_velocities
+from lib.plot import similarity_to_figure, boundary_to_figure, distance_boundary_to_figure
 from modules.losses import (
     ApproachingMomentumLoss,
     RegionalCosineSimilarityLoss,
 )
+from modules.metrics import (
+    AverageChamferDistance,
+    QuantityMetricCollection,
+)
+from modules.metrics.quantity import match_nearest_boundaries
 from modules.syllable_splitter import SyllableSplitter
 from .data import BaseDataset
 from .pl_module_base import BaseLightningModule
+
+
+BOUNDARY_MATCHING_TOLERANCE = 5
+BOUNDARY_DECODING_THRESHOLD = 0.2
+BOUNDARY_DECODING_RADIUS = 2
 
 
 class SyllablesDataset(BaseDataset):
@@ -34,6 +44,10 @@ class SyllablesLightningModule(BaseLightningModule):
             decay_power=self.training_config.loss.boundary_loss.decay_power,
             decay_alpha=self.training_config.loss.boundary_loss.decay_alpha,
         ))
+        self.register_metric("average_chamfer_distance", AverageChamferDistance())
+        self.register_metric("quantity_metric_collection", QuantityMetricCollection(
+            tolerance=BOUNDARY_MATCHING_TOLERANCE
+        ))
 
     def forward_model(self, sample: dict[str, torch.Tensor], infer: bool) -> dict[str, torch.Tensor]:
         spectrogram = sample["spectrogram"]
@@ -51,9 +65,17 @@ class SyllablesLightningModule(BaseLightningModule):
         features, velocities = self.model(spectrogram, language_ids, mask=mask)  # [B, T, T]
         if infer:
             similarities = self_cosine_similarity(features)  # [B, T, T]
+            boundaries_pred = decode_boundaries_from_velocities(
+                velocities,
+                threshold=BOUNDARY_DECODING_THRESHOLD,
+                radius=BOUNDARY_DECODING_RADIUS,
+            )
+            self.metrics["average_chamfer_distance"](boundaries_pred, boundaries)
+            self.metrics["quantity_metric_collection"](boundaries_pred, boundaries)
             return {
                 "similarities": similarities,
                 "velocities": velocities,
+                "boundaries": boundaries_pred,
             }
         else:
             region_loss = self.losses["region_loss"](features, regions)
@@ -70,18 +92,35 @@ class SyllablesLightningModule(BaseLightningModule):
             N = self.valid_dataset.info["durations"][data_idx]
             if data_idx >= self.training_config.validation.max_plots:
                 continue
-            similarities = outputs["similarities"][i, :T, :T]  # [T, T]
-            velocities = outputs["velocities"][i, :T]  # [T]
             durations = sample["durations"][i, :N]  # [N]
             boundaries = sample["boundaries"][i, :T]  # [T]
+            similarities = outputs["similarities"][i, :T, :T]  # [T, T]
+            velocities = outputs["velocities"][i, :T]  # [T]
+            boundaries_pred = outputs["boundaries"][i, :T]  # [T]
+
+            match_pred_to_target, match_target_to_pred = match_nearest_boundaries(
+                boundaries_pred, boundaries, tolerance=BOUNDARY_MATCHING_TOLERANCE
+            )
+            boundaries_tp = match_pred_to_target
+            boundaries_fp = boundaries_pred & ~match_pred_to_target
+            boundaries_fn = boundaries & ~match_target_to_pred
+
             distance_gt = distance_transform(boundaries)
             distance_pred = velocities.cumsum(dim=0)
+            bias = distance_pred.min().clamp(min=0)
+            scale = (distance_pred.max() - bias).clamp(min=1e-3)
+            threshold_denorm = (BOUNDARY_DECODING_THRESHOLD * scale + bias).cpu().numpy().item()
+
             self.plot_regions(
                 data_idx, similarities, durations,
                 title=self.valid_dataset.info["item_paths"][data_idx]
             )
             self.plot_distance(
                 data_idx, distance_gt, distance_pred,
+                threshold=threshold_denorm,
+                boundaries_tp=boundaries_tp,
+                boundaries_fp=boundaries_fp,
+                boundaries_fn=boundaries_fn,
                 title=self.valid_dataset.info["item_paths"][data_idx]
             )
 
@@ -117,11 +156,26 @@ class SyllablesLightningModule(BaseLightningModule):
     def plot_distance(
             self, idx: int,
             distance_gt: torch.Tensor, distance_pred: torch.Tensor,
+            threshold: float = None,
+            boundaries_tp: torch.Tensor = None,
+            boundaries_fp: torch.Tensor = None,
+            boundaries_fn: torch.Tensor = None,
             title=None
     ):
         distance_gt = distance_gt.cpu().numpy()
         distance_pred = distance_pred.cpu().numpy()
+        if boundaries_tp is not None:
+            boundaries_tp = boundaries_tp.cpu().numpy()
+        if boundaries_fp is not None:
+            boundaries_fp = boundaries_fp.cpu().numpy()
+        if boundaries_fn is not None:
+            boundaries_fn = boundaries_fn.cpu().numpy()
         logger: TensorBoardLogger = self.logger
-        logger.experiment.add_figure(f"boundaries/boundaries_{idx}", distance_to_figure(
-            distance_gt, distance_pred, title=title
+        logger.experiment.add_figure(f"boundaries/boundaries_{idx}", distance_boundary_to_figure(
+            distance_gt, distance_pred,
+            threshold=threshold,
+            boundaries_tp=boundaries_tp,
+            boundaries_fp=boundaries_fp,
+            boundaries_fn=boundaries_fn,
+            title=title
         ), global_step=self.global_step)

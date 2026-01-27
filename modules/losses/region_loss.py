@@ -13,10 +13,10 @@ class RegionalCosineSimilarityLoss(nn.Module):
         neighborhood_size: int, regions with index difference within this size are considered neighbors.
         exponential_decay: bool, if True, the penalty for different regions decays exponentially with distance.
     Inputs:
-        x: Tensor of shape [B, T, C] where B is batch size, T is time frames, C is feature dimension.
-        regions: Tensor of shape [B, T] mapping each frame to a region index (1, 2, ..., N). 0 indicates no region.
+        - x: Tensor of shape [B, T, C] where B is batch size, T is time frames, C is feature dimension.
+        - regions: Tensor of shape [B, T] mapping each frame to a region index (1, 2, ..., N). 0 indicates no region.
     Outputs:
-        loss: Scalar tensor representing the average regional cosine similarity loss.
+        Scalar tensor representing the average regional cosine similarity loss.
     """
 
     def __init__(self, neighborhood_size: int, exponential_decay: bool = False):

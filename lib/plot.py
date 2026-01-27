@@ -24,14 +24,50 @@ def similarity_to_figure(similarities, durations, title=None):
     return fig
 
 
-def distance_to_figure(
+def distance_boundary_to_figure(
         distance_gt: np.ndarray, distance_pred: np.ndarray,
+        threshold: float = None,
+        boundaries_tp: np.ndarray = None,
+        boundaries_fp: np.ndarray = None,
+        boundaries_fn: np.ndarray = None,
         title=None
 ):
+    figure_width = 12
+    figure_height = 6
     fig = plt.figure(figsize=(12, 6))
     plt.plot(distance_gt, color='b', label='gt')
     plt.plot(distance_pred, color='r', label='pred')
-    plt.ylim(min(0, distance_gt.min(), distance_pred.min()) - 1, min(distance_gt.max(), distance_pred.max()) + 1)
+    if threshold is not None:
+        plt.plot([0, distance_gt.shape[0]], [threshold, threshold], color='black', linestyle='--')
+    positions = np.arange(distance_gt.shape[0], dtype=np.int64)
+    circle_radius = 10
+    x_min = -1
+    x_max = distance_gt.shape[0]
+    y_min = min(0, distance_gt.min(), distance_pred.min()) - 1
+    y_max = min(distance_gt.max(), distance_pred.max()) + 1
+    ratio = (figure_width / figure_height) * (y_max - y_min) / (x_max - x_min)
+
+    def _draw_circles(x_index, y_arr, color, label):
+        label_added = False
+        for pos in positions[x_index]:
+            plt.gca().add_patch(
+                matplotlib.patches.Ellipse(
+                    xy=(pos, y_arr[pos]),
+                    width=circle_radius, height=circle_radius * ratio,
+                    edgecolor=color, fill=False,
+                    linewidth=1.5, label=(label if not label_added else None)
+                )
+            )
+            label_added = True
+
+    if boundaries_tp is not None:
+        _draw_circles(positions[boundaries_tp], distance_pred, 'green', 'match')
+    if boundaries_fp is not None:
+        _draw_circles(positions[boundaries_fp], distance_pred, 'orange', 'exceed')
+    if boundaries_fn is not None:
+        _draw_circles(positions[boundaries_fn], distance_pred, 'grey', 'miss')
+    plt.xlim(-1, distance_gt.shape[0])
+    plt.ylim(y_min, y_max)
     plt.grid(axis='y')
     plt.legend()
     if title is not None:
