@@ -39,10 +39,11 @@ class SyllablesLightningModule(BaseLightningModule):
             exponential_decay=self.training_config.loss.region_loss.exponential_decay,
         ))
         self.register_loss("boundary_loss", ApproachingMomentumLoss(
-            constant_radius=self.training_config.loss.boundary_loss.constant_radius,
-            cutoff_radius=self.training_config.loss.boundary_loss.cutoff_radius,
-            decay_power=self.training_config.loss.boundary_loss.decay_power,
+            radius=self.training_config.loss.boundary_loss.radius,
+            decay_start=self.training_config.loss.boundary_loss.decay_start,
+            decay_width=self.training_config.loss.boundary_loss.decay_width,
             decay_alpha=self.training_config.loss.boundary_loss.decay_alpha,
+            decay_power=self.training_config.loss.boundary_loss.decay_power,
         ))
         self.register_metric("average_chamfer_distance", AverageChamferDistance())
         self.register_metric("quantity_metric_collection", QuantityMetricCollection(
@@ -105,7 +106,7 @@ class SyllablesLightningModule(BaseLightningModule):
             boundaries_fp = boundaries_pred & ~match_pred_to_target
             boundaries_fn = boundaries & ~match_target_to_pred
 
-            distance_gt = distance_transform(boundaries)
+            distance_gt = distance_transform(boundaries, max_distance=self.training_config.loss.boundary_loss.radius)
             distance_pred = velocities.cumsum(dim=0)
             d_min = distance_pred.min()
             d_max = distance_pred.max()

@@ -120,10 +120,11 @@ class RegionLossConfig(ConfigBaseModel):
 
 
 class BoundaryLossConfig(ConfigBaseModel):
-    constant_radius: int = Field(20)
-    cutoff_radius: int = Field(40)
-    decay_power: float = Field(2.0)
+    radius: int = Field(20, gt=0)
+    decay_start: int = Field(20)
+    decay_width: int = Field(20)
     decay_alpha: float = Field(0.5)
+    decay_power: float = Field(2.0)
 
 
 class LossConfig(ConfigBaseModel):

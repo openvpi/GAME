@@ -71,12 +71,13 @@ def random_continuous_masks(*shape: int, dim: int, device: str | torch.device = 
     return masks
 
 
-def distance_transform(boundaries: Tensor) -> Tensor:
+def distance_transform(boundaries: Tensor, max_distance: int = None) -> Tensor:
     """
     Compute the distance transform for binary boundary indicators.
     For consistency with cases where there are no boundaries, we pad boundaries with 1s at both ends.
     For each position, compute the distance to the nearest boundary (where boundary == 1).
     :param boundaries: [..., T], 1 = boundary, 0 = non-boundary
+    :param max_distance: int, maximum distance to consider
     :return: [..., T]
     """
     boundaries = F.pad(boundaries, (1, 1), mode="constant", value=1)
@@ -86,6 +87,8 @@ def distance_transform(boundaries: Tensor) -> Tensor:
     masked_indices = torch.where(boundaries, indices, torch.full_like(indices, fill_value=float("inf")))
     distance = torch.abs(indices.unsqueeze(-1) - masked_indices.unsqueeze(-2)).amin(dim=-1)
     distance = distance[..., 1:-1]
+    if max_distance is not None:
+        distance = torch.clamp(distance, max=max_distance)
     return distance
 
 
