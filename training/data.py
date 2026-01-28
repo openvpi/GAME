@@ -8,7 +8,6 @@ import torch
 
 from lib.config.schema import AugmentationConfig
 from lib.feature.mel import StretchableMelSpectrogram
-from lib.functional import collate_nd
 from lib.indexed_dataset import IndexedDataset
 
 
@@ -16,6 +15,18 @@ __all__ = [
     "BaseDataset",
     "DynamicBatchSampler",
 ]
+
+
+def collate_nd(values, pad_value=0, max_len=None):
+    """
+    Pad a list of Nd tensors on their first dimension and stack them into a (N+1)d tensor.
+    """
+    size = ((max(v.size(0) for v in values) if max_len is None else max_len), *values[0].shape[1:])
+    res = torch.full((len(values), *size), fill_value=pad_value, dtype=values[0].dtype, device=values[0].device)
+
+    for i, v in enumerate(values):
+        res[i, :len(v), ...] = v
+    return res
 
 
 class BaseDataset(torch.utils.data.Dataset):

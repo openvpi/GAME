@@ -2,7 +2,9 @@ import torch
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch import nn
 
-from lib.functional import self_cosine_similarity, distance_transform, decode_boundaries_from_velocities
+from modules.decoding import decode_boundaries_from_velocities
+from modules.losses.region_loss import self_cosine_similarity
+from modules.losses.boundary_loss import distance_transform
 from lib.plot import similarity_to_figure, boundary_to_figure, distance_boundary_to_figure
 from modules.losses import (
     ApproachingMomentumLoss,

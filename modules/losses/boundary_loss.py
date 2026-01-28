@@ -2,8 +2,7 @@ import math
 
 import torch
 from torch import nn, Tensor
-
-from lib.functional import distance_transform
+from torch.nn import functional as F
 
 
 class BoundaryEarthMoversDistanceLoss(torch.nn.Module):
@@ -94,3 +93,24 @@ class ApproachingMomentumLoss(nn.Module):
         else:
             loss = loss.mean()
         return loss
+
+
+def distance_transform(boundaries: Tensor, max_distance: int = None) -> Tensor:
+    """
+    Compute the distance transform for binary boundary indicators.
+    For consistency with cases where there are no boundaries, we pad boundaries with 1s at both ends.
+    For each position, compute the distance to the nearest boundary (where boundary == 1).
+    :param boundaries: [..., T], 1 = boundary, 0 = non-boundary
+    :param max_distance: int, maximum distance to consider
+    :return: [..., T]
+    """
+    boundaries = F.pad(boundaries, (1, 1), mode="constant", value=1)
+    indices = torch.arange(
+        boundaries.shape[-1], dtype=torch.float32, device=boundaries.device,
+    ).view([1] * (boundaries.ndim - 1) + [-1])  # [..., T]
+    masked_indices = torch.where(boundaries, indices, torch.full_like(indices, fill_value=float("inf")))
+    distance = torch.abs(indices.unsqueeze(-1) - masked_indices.unsqueeze(-2)).amin(dim=-1)
+    distance = distance[..., 1:-1]
+    if max_distance is not None:
+        distance = torch.clamp(distance, max=max_distance)
+    return distance
