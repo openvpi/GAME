@@ -1,2 +1,3 @@
 from .boundary_loss import BoundaryEarthMoversDistanceLoss, ApproachingMomentumLoss
+from .note_loss import GaussianBlurredBinsLoss
 from .region_loss import RegionalCosineSimilarityLoss

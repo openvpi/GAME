@@ -30,15 +30,18 @@ class GaussianBlurredBinsLoss(nn.Module):
         self.register_buffer("centers", centers, persistent=False)
         self.criterion = nn.BCEWithLogitsLoss(reduction="none")
 
-    def forward(self, logits: Tensor, scores: Tensor, presence: Tensor, mask=None) -> Tensor:
-        B = (1,) * (logits.ndim - 2)
-        if mask is not None:
-            mask = mask.unsqueeze(-1).float().expand_as(logits)
+    def get_gaussian_blurred_bins(self, scores: Tensor, presence: Tensor) -> Tensor:
+        B = (1,) * (scores.ndim - 2)
         centers = self.centers.reshape(*B, 1, -1)  # [..., 1, N]
         diffs = scores.unsqueeze(-1) - centers  # [..., T, N]
         gaussians = torch.exp(-0.5 * (diffs / self.std) ** 2)  # [..., T, N]
-        gaussians = gaussians / (gaussians.sum(dim=-1, keepdim=True) + 1e-6)  # normalize
         targets = gaussians * presence.unsqueeze(-1)  # zero out where no presence
+        return targets
+
+    def forward(self, logits: Tensor, scores: Tensor, presence: Tensor, mask=None) -> Tensor:
+        if mask is not None:
+            mask = mask.unsqueeze(-1).float().expand_as(logits)
+        targets = self.get_gaussian_blurred_bins(scores, presence)  # [..., T, N]
         loss = self.criterion(logits, targets)
         if mask is not None:
             loss = (loss * mask).sum() / (mask.sum() + 1e-6)
