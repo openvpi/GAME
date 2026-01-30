@@ -11,8 +11,8 @@ from .ops import (
 
 
 class ConfigurationScope:
-    SYLLABLES = 0x1
-    NOTES = 0x2
+    SEGMENTATION = 0x1
+    ESTIMATION = 0x2
 
 
 class DynamicCheck:
@@ -72,14 +72,48 @@ class BinarizerConfig(ConfigBaseModel):
         return pathlib.Path(self.data_dir).resolve()
 
 
+class BackboneConfig(ConfigBaseModel):
+    cls: str = Field(...)
+    kwargs: dict[str, Any] = Field(...)
+
+
 class ModelConfig(ConfigBaseModel):
-    num_languages: int = Field(127, ge=0)
+    use_languages: bool = Field(True, json_schema_extra={
+        "scope": ConfigurationScope.SEGMENTATION
+    })
+    num_languages: int = Field(127, ge=0, json_schema_extra={
+        "scope": ConfigurationScope.SEGMENTATION
+    })
+    region_cycle_len: int = Field(3)
     in_channels: int = Field(None, json_schema_extra={
         "dynamic_expr": ref("binarizer.features.spectrogram.num_bins")
     })
     embedding_dim: int = Field(128, gt=0)
-    backbone_class: str = Field(...)
-    backbone_kwargs: dict[str, Any] = Field(...)
+    midi_min: float = Field(0.0, json_schema_extra={
+        "scope": ConfigurationScope.ESTIMATION
+    })
+    midi_max: float = Field(127.0, json_schema_extra={
+        "scope": ConfigurationScope.ESTIMATION,
+        "dynamic_check": DynamicCheck(
+            expr=this() > ref("model.midi_min"),
+            message="midi_max must be greater than midi_min."
+        )
+    })
+    midi_num_bins: int = Field(256, ge=2, json_schema_extra={
+        "scope": ConfigurationScope.ESTIMATION
+    })
+    segmenter: BackboneConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.SEGMENTATION,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.SEGMENTATION),
+    })
+    adaptor: BackboneConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.ESTIMATION,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.SEGMENTATION),
+    })
+    estimator: BackboneConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.ESTIMATION,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.SEGMENTATION),
+    })
 
 
 class PitchShiftingAugmentationConfig(ConfigBaseModel):
@@ -127,9 +161,20 @@ class BoundaryLossConfig(ConfigBaseModel):
     decay_power: float = Field(2.0)
 
 
+class NoteLossConfig(ConfigBaseModel):
+    deviation: float = Field(1.0, gt=0.0)
+
+
 class LossConfig(ConfigBaseModel):
     region_loss: RegionLossConfig = Field(...)
-    boundary_loss: BoundaryLossConfig = Field(...)
+    boundary_loss: BoundaryLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.SEGMENTATION,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.SEGMENTATION),
+    })
+    note_loss: NoteLossConfig = Field(None, json_schema_extra={
+        "scope": ConfigurationScope.ESTIMATION,
+        "dynamic_check": RequiredOnGivenScope(ConfigurationScope.ESTIMATION),
+    })
 
 
 class DataLoaderConfig(ConfigBaseModel):
@@ -280,6 +325,9 @@ class TrainingConfig(ConfigBaseModel):
 class InferenceConfig(ConfigBaseModel):
     features: BinarizerFeaturesConfig = Field(None, json_schema_extra={
         "dynamic_expr": ref("binarizer.features")
+    })
+    use_language_embedding: bool = Field(None, json_schema_extra={
+        "dynamic_expr": ref("model.use_language_embedding")
     })
 
 

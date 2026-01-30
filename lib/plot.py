@@ -10,7 +10,7 @@ from matplotlib.ticker import MultipleLocator
 def similarity_to_figure(similarities, durations, title=None):
     dur_cumsum = np.cumsum(durations)
     fig = plt.figure(figsize=(9, 9))
-    plt.pcolor(similarities.T, vmin=0, vmax=1)
+    plt.pcolor(similarities, vmin=-1, vmax=1)
     for i in range(durations.shape[0]):
         rect = matplotlib.patches.Rectangle(
             xy=(dur_cumsum[i] - durations[i], dur_cumsum[i] - durations[i]),
@@ -35,10 +35,10 @@ def distance_boundary_to_figure(
     figure_width = 12
     figure_height = 6
     fig = plt.figure(figsize=(12, 6))
-    plt.plot(distance_gt, color='b', label='gt')
-    plt.plot(distance_pred, color='r', label='pred')
+    plt.plot(distance_gt, color="b", label="gt")
+    plt.plot(distance_pred, color="r", label="pred")
     if threshold is not None:
-        plt.plot([0, distance_gt.shape[0]], [threshold, threshold], color='black', linestyle='--')
+        plt.plot([0, distance_gt.shape[0]], [threshold, threshold], color="black", linestyle="--")
     positions = np.arange(distance_gt.shape[0], dtype=np.int64)
     circle_radius = 10
     x_min = -1
@@ -61,14 +61,14 @@ def distance_boundary_to_figure(
             label_added = True
 
     if boundaries_tp is not None:
-        _draw_circles(positions[boundaries_tp], distance_pred, 'green', 'match')
+        _draw_circles(positions[boundaries_tp], distance_pred, "green", "match")
     if boundaries_fp is not None:
-        _draw_circles(positions[boundaries_fp], distance_pred, 'orange', 'exceed')
+        _draw_circles(positions[boundaries_fp], distance_pred, "orange", "exceed")
     if boundaries_fn is not None:
-        _draw_circles(positions[boundaries_fn], distance_gt, 'grey', 'miss')
+        _draw_circles(positions[boundaries_fn], distance_gt, "grey", "miss")
     plt.xlim(-1, distance_gt.shape[0])
     plt.ylim(y_min, y_max)
-    plt.grid(axis='y')
+    plt.grid(axis="y")
     plt.legend()
     if title is not None:
         plt.title(title, fontsize=15)
@@ -84,16 +84,16 @@ def boundary_to_figure(
     fig = plt.figure(figsize=(12, 6))
     bounds_acc_gt = np.cumsum(bounds_gt)
     bounds_acc_pred = np.cumsum(bounds_pred)
-    plt.plot(bounds_acc_gt, color='b', label='gt')
-    plt.plot(bounds_acc_pred, color='r', label='pred')
+    plt.plot(bounds_acc_gt, color="b", label="gt")
+    plt.plot(bounds_acc_pred, color="r", label="pred")
     if dur_gt is not None and dur_pred is not None:
         height = math.ceil(max(bounds_acc_gt[-1], bounds_acc_pred[-1]))
         dur_acc_gt = np.cumsum(dur_gt)
         dur_acc_pred = np.cumsum(dur_pred)
-        plt.vlines(dur_acc_gt[:-1], 0, height / 2, colors='b', linestyles='--')
-        plt.vlines(dur_acc_pred[:-1], height / 2, height, colors='r', linestyles='--')
+        plt.vlines(dur_acc_gt[:-1], 0, height / 2, colors="b", linestyles="--")
+        plt.vlines(dur_acc_pred[:-1], height / 2, height, colors="r", linestyles="--")
     plt.gca().yaxis.set_major_locator(MultipleLocator(1))
-    plt.grid(axis='y')
+    plt.grid(axis="y")
     plt.legend()
     if title is not None:
         plt.title(title, fontsize=15)
@@ -123,15 +123,15 @@ def dur_to_figure(dur_gt, dur_pred, txt, title=None):
     dur_pred = np.cumsum(dur_pred)
     width = max(12, min(48, len(txt) // 2))
     fig = plt.figure(figsize=(width, 8))
-    plt.vlines(dur_pred, 12, 22, colors='r', label='pred')
-    plt.vlines(dur_gt, 0, 10, colors='b', label='gt')
+    plt.vlines(dur_pred, 12, 22, colors="r", label="pred")
+    plt.vlines(dur_gt, 0, 10, colors="b", label="gt")
     for i in range(len(txt)):
         shift = (i % 8) + 1
         plt.text((dur_pred[i-1] + dur_pred[i]) / 2 if i > 0 else dur_pred[i] / 2, 12 + shift, txt[i],
-                 size=16, horizontalalignment='center')
+                 size=16, horizontalalignment="center")
         plt.text((dur_gt[i-1] + dur_gt[i]) / 2 if i > 0 else dur_gt[i] / 2, shift, txt[i],
-                 size=16, horizontalalignment='center')
-        plt.plot([dur_pred[i], dur_gt[i]], [12, 10], color='black', linewidth=2, linestyle=':')
+                 size=16, horizontalalignment="center")
+        plt.plot([dur_pred[i], dur_gt[i]], [12, 10], color="black", linewidth=2, linestyle=":")
     plt.yticks([])
     plt.xlim(0, max(dur_pred[-1], dur_gt[-1]))
     plt.legend()
@@ -164,15 +164,15 @@ def pitch_note_to_figure(pitch_gt, pitch_pred=None, note_midi=None, note_dur=Non
                 plt.Rectangle(
                     xy=(note_dur_acc[i-1] if i > 0 else 0, note_midi[i] - 0.5),
                     width=note_dur[i], height=1,
-                    edgecolor='grey', fill=False,
-                    linewidth=1.5, linestyle='--' if note_rest[i] else '-'
+                    edgecolor="grey", fill=False,
+                    linewidth=1.5, linestyle="--" if note_rest[i] else "-"
                 )
             )
-    plt.plot(pitch_gt, color='b', label='gt')
+    plt.plot(pitch_gt, color="b", label="gt")
     if pitch_pred is not None:
-        plt.plot(pitch_pred, color='r', label='pred')
+        plt.plot(pitch_pred, color="r", label="pred")
     plt.gca().yaxis.set_major_locator(MultipleLocator(1))
-    plt.grid(axis='y')
+    plt.grid(axis="y")
     plt.legend()
     if title is not None:
         plt.title(title, fontsize=15)
@@ -189,13 +189,13 @@ def curve_to_figure(curve_gt, curve_pred=None, curve_base=None, grid=None, title
         curve_base = curve_base.cpu().numpy()
     fig = plt.figure()
     if curve_base is not None:
-        plt.plot(curve_base, color='g', label='base')
-    plt.plot(curve_gt, color='b', label='gt')
+        plt.plot(curve_base, color="g", label="base")
+    plt.plot(curve_gt, color="b", label="gt")
     if curve_pred is not None:
-        plt.plot(curve_pred, color='r', label='pred')
+        plt.plot(curve_pred, color="r", label="pred")
     if grid is not None:
         plt.gca().yaxis.set_major_locator(MultipleLocator(grid))
-    plt.grid(axis='y')
+    plt.grid(axis="y")
     plt.legend()
     if title is not None:
         plt.title(title, fontsize=15)
@@ -209,7 +209,7 @@ def distribution_to_figure(title, x_label, y_label, items: list, values: list, z
     plt.tick_params(labelsize=15)
     plt.xlim(-1, len(items))
     for a, b in zip(items, values):
-        plt.text(a, b, b, ha='center', va='bottom', fontsize=15)
+        plt.text(a, b, b, ha="center", va="bottom", fontsize=15)
     plt.grid(axis="y")
     plt.title(title, fontsize=30)
     plt.xlabel(x_label, fontsize=20)

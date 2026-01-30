@@ -4,26 +4,22 @@ import pathlib
 import random
 from dataclasses import dataclass
 
-import dask
-import librosa
 import numpy
 import torch
 import tqdm
 
 from lib import logging
 from lib.config.schema import BinarizerConfig
-from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDatasetBuilder
 from lib.multiprocess import chunked_multiprocess_run
 from modules.commons.tts_modules import LengthRegulator
-
 
 ACCEPTED_AUDIO_FORMATS = {".wav", ".flac"}
 
 
 @dataclass
 class MetadataItem(abc.ABC):
-    item_name: str
+    name: str
     language: str
     waveform_fn: pathlib.Path
     estimated_duration: float
@@ -161,48 +157,6 @@ class BaseBinarizer(abc.ABC):
         self.train_items.sort(key=lambda itm: itm.estimated_duration, reverse=True)
         self.process_items(self.valid_items, prefix="valid", multiprocessing=False)
         self.process_items(self.train_items, prefix="train", multiprocessing=True)
-
-    @dask.delayed
-    def load_waveform(self, wav_fn: pathlib.Path):
-        waveform, _ = librosa.load(wav_fn, sr=self.config.features.audio_sample_rate, mono=True)
-        return waveform
-
-    @dask.delayed(nout=2)
-    @torch.no_grad()
-    def get_mel(self, waveform: numpy.ndarray):
-        if self.mel_spec is None:
-            self.mel_spec = StretchableMelSpectrogram(
-                sample_rate=self.config.features.audio_sample_rate,
-                n_mels=self.config.features.spectrogram.num_bins,
-                n_fft=self.config.features.fft_size,
-                win_length=self.config.features.win_size,
-                hop_length=self.config.features.hop_size,
-                fmin=self.config.features.spectrogram.fmin,
-                fmax=self.config.features.spectrogram.fmax,
-                clip_val=1e-9,
-            ).eval().to(self.device)
-        mel = self.mel_spec(
-            torch.from_numpy(waveform).to(self.device).unsqueeze(0),
-        ).squeeze(0).T.cpu().numpy()
-        return mel, mel.shape[0]
-
-    @dask.delayed
-    def sec_dur_to_frame_dur(self, dur_sec: numpy.ndarray, length: int):
-        dur_cumsum = numpy.round(numpy.cumsum(dur_sec, axis=0) / self.timestep).astype(numpy.int64)
-        dur_cumsum = numpy.clip(dur_cumsum, a_min=0, a_max=length)
-        dur_cumsum[-1] = length
-        dur_frame = numpy.diff(dur_cumsum, axis=0, prepend=numpy.array([0]))
-        return dur_frame
-
-    @dask.delayed
-    def length_regulator(self, dur_frames: numpy.ndarray):
-        return self.lr(torch.from_numpy(dur_frames).long().unsqueeze(0)).squeeze(0).numpy()
-
-    @dask.delayed
-    def regions_to_boundaries(self, regions: numpy.ndarray):
-        boundaries = numpy.diff(regions, axis=0, prepend=numpy.array([1])) > 0
-        return boundaries
-
 
 def find_waveform_file(subset_dir: pathlib.Path, item_name: str) -> pathlib.Path:
     for ext in ACCEPTED_AUDIO_FORMATS:

@@ -231,36 +231,34 @@ class EBF(nn.Module):
     ):
         super().__init__()
 
-
-
         if ffn_type == 'glu':
-            self.ffn1 =GLUFFN(
+            self.ffn1 = GLUFFN(
                 dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
                 dropout_output=ffn_out_drop
             )
-            self.ffn2 =GLUFFN(
+            self.ffn2 = GLUFFN(
                 dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
                 dropout_output=ffn_out_drop
             )
-        elif ffn_type=='ffn':
-            self.ffn1 =FFN(
+        elif ffn_type == 'ffn':
+            self.ffn1 = FFN(
                 dim, latent_dim=dim * 4,
                 dropout_latent=ffn_latent_drop,
                 dropout_output=ffn_out_drop
             )
-            self.ffn2 =FFN(
+            self.ffn2 = FFN(
                 dim, latent_dim=dim * 4,
                 dropout_latent=ffn_latent_drop,
                 dropout_output=ffn_out_drop
             )
-        elif ffn_type=='cgmlp':
-            self.ffn1 =CgMLP(
+        elif ffn_type == 'cgmlp':
+            self.ffn1 = CgMLP(
                 dim, latent_dim=int(dim * 2.5), latent_drop=ffn_latent_drop,
-                out_drop=ffn_out_drop,kernel_size=21
+                out_drop=ffn_out_drop, kernel_size=21
             )
-            self.ffn2 =CgMLP(
+            self.ffn2 = CgMLP(
                 dim, latent_dim=int(dim * 2.5), latent_drop=ffn_latent_drop,
-                out_drop=ffn_out_drop,kernel_size=7
+                out_drop=ffn_out_drop, kernel_size=7
             )
         else:
             raise ValueError(f"Unknown ffn_type: {ffn_type}")
@@ -298,19 +296,12 @@ class EBF(nn.Module):
 
 
 class EBFBackbone(nn.Module):
-    """
-    完整的EBF Backbone，符合SyllableSplitter接口规范
-    
-    输入: x [B, T, in_dim]
-    输出: features [B, T, sim_dim], velocities [B, T]
-    """
-
     def __init__(
-            self, in_dim: int,
+            self, in_dim: int, out_dim: int, return_latent: bool,
             dim: int = 256,
             num_layers: int = 8,
-            sim_cut_layer_idx: int = 6,
-            sim_dim: int = 16,
+            latent_layer_idx: int = 6,
+            latent_out_dim: int = 16,
             num_heads: int = 8,
             head_dim: int = 64,
             c_kernel_size: int = 31,
@@ -327,13 +318,13 @@ class EBFBackbone(nn.Module):
             ffn_out_drop: float = 0.1,
     ):
         super().__init__()
-        assert sim_cut_layer_idx <= num_layers
-        self.sim_cut_layer_idx = sim_cut_layer_idx
+        self.return_latent = return_latent
+        if return_latent:
+            assert latent_layer_idx <= num_layers
+        self.latent_layer_idx = latent_layer_idx
 
-        # 输入投影: in_dim -> dim
         self.input_proj = nn.Linear(in_dim, dim)
 
-        # EBF blocks堆叠
         self.layers = nn.ModuleList([
             EBF(dim=dim, num_heads=num_heads, head_dim=head_dim,
                 c_kernel_size=c_kernel_size, m_kernel_size=m_kernel_size,
@@ -345,33 +336,33 @@ class EBFBackbone(nn.Module):
             for _ in range(num_layers)
         ])
 
-        # 输出层
-        self.output_norm1 = RMSnorm(dim)
-        self.output_norm2 = RMSnorm(dim)
-        self.feature_head = nn.Linear(dim, sim_dim)  # -> [B, T, sim_dim]
-        self.boundary_head = nn.Linear(dim, 1)  # -> [B, T, 1]
+        if self.return_latent:
+            self.latent_norm = RMSnorm(dim)
+            self.latent_proj = nn.Linear(dim, latent_out_dim)  # -> [B, T, C_latent]
+        self.output_norm = RMSnorm(dim)
+        self.output_proj = nn.Linear(dim, out_dim)  # -> [B, T, C_out]
 
     def forward(self, x, mask=None):
         """
         Args:
-            x: [B, T, in_dim] input spectrogram
+            x: [B, T, in_dim] input tensor
             mask: [B, T] valid mask
         Returns:
-            features: [B, T, sim_dim] for self cosine similarity
-            velocities: [B, T] velocity towards boundaries
+            latent: [B, T, C_latent] intermediate latent tensor for self cosine similarity
+            out: [B, T, C_out] output tensor
         """
         x = self.input_proj(x)
 
-        for layer in self.layers[:self.sim_cut_layer_idx]:
+        latent = None
+        for i, layer in enumerate(self.layers):
             x = layer(x, mask=mask)
-        x = self.output_norm1(x)
+            if self.return_latent and i == self.latent_layer_idx - 1:
+                latent = self.latent_norm(x)
+                latent = self.latent_proj(latent)  # [B, T, C_latent]
+        x = self.output_norm(x)
+        out = self.output_proj(x)  # [B, T, C_out]
 
-        features = self.feature_head(x)  # [B, T, sim_dim]
-
-        for layer in self.layers[self.sim_cut_layer_idx:]:
-            x = layer(x, mask=mask)
-        x = self.output_norm2(x)
-
-        velocities = self.boundary_head(x).squeeze(-1).tanh()  # [B, T]
-
-        return features, velocities
+        if self.return_latent:
+            return out, latent
+        else:
+            return out

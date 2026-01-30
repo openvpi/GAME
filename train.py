@@ -12,7 +12,7 @@ from lib.config.formatter import ModelFormatter
 from lib.config.io import load_raw_config
 from lib.config.schema import (
     RootConfig,
-    PeriodicCheckpointConfig, ExpressionCheckpointConfig,
+    PeriodicCheckpointConfig, ExpressionCheckpointConfig, ConfigurationScope,
 )
 
 __all__ = [
@@ -199,13 +199,22 @@ def train_model(
 
 
 def _get_config_scope(key: str) -> int:
+    scopes = {
+        "segmentation": ConfigurationScope.SEGMENTATION,
+        "estimation": ConfigurationScope.ESTIMATION,
+    }
+    if key in scopes:
+        return scopes[key]
     raise ValueError(f"Invalid config scope key: {key}")
 
 
 def _get_lightning_module_cls(key: str):
-    if key == "syllables":
-        from training.syllables_module import SyllablesLightningModule
-        return SyllablesLightningModule
+    if key == "segmentation":
+        from training.segmentation_module import SegmentationLightningModule
+        return SegmentationLightningModule
+    elif key == "estimation":
+        from training.estimation_module import EstimationLightningModule
+        return EstimationLightningModule
     else:
         raise ValueError(f"Invalid lightning module key: {key}")
 
@@ -218,8 +227,8 @@ def _exec_training(
         restart: bool,
         resume_from: pathlib.Path
 ):
-    # scope = _get_config_scope(recipe_key)
-    config = _load_config(config, overrides=override)
+    scope = _get_config_scope(recipe_key)
+    config = _load_config(config, overrides=override, scope=scope)
     ckpt_save_dir = work_dir / exp_name
     if log_dir is None:
         log_save_dir = ckpt_save_dir
@@ -313,9 +322,9 @@ def shared_options(func):
     return func
 
 
-@main.command(name="syllables", help="Train syllable splitter.")
+@main.command(name="segmentation", help="Train a segmentation model.")
 @shared_options
-def _train_syllable_splitter_cli(
+def _train_segmentation_cli(
         config: pathlib.Path, override: list[str],
         exp_name: str, work_dir: pathlib.Path,
         log_dir: pathlib.Path,
@@ -323,7 +332,25 @@ def _train_syllable_splitter_cli(
         resume_from: pathlib.Path,
 ):
     _exec_training(
-        recipe_key="syllables",
+        recipe_key="segmentation",
+        config=config, override=override,
+        exp_name=exp_name, work_dir=work_dir,
+        log_dir=log_dir,
+        restart=restart, resume_from=resume_from,
+    )
+
+
+@main.command(name="estimation", help="Train an estimation model.")
+@shared_options
+def _train_estimation_cli(
+        config: pathlib.Path, override: list[str],
+        exp_name: str, work_dir: pathlib.Path,
+        log_dir: pathlib.Path,
+        restart: bool,
+        resume_from: pathlib.Path,
+):
+    _exec_training(
+        recipe_key="estimation",
         config=config, override=override,
         exp_name=exp_name, work_dir=work_dir,
         log_dir=log_dir,

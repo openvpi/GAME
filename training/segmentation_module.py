@@ -1,39 +1,40 @@
 import torch
+import torch.nn.functional as F
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch import nn
 
+from lib.plot import similarity_to_figure, distance_boundary_to_figure, boundary_to_figure
 from modules.decoding import decode_boundaries_from_velocities
-from modules.losses.region_loss import self_cosine_similarity
-from modules.losses.boundary_loss import distance_transform
-from lib.plot import similarity_to_figure, boundary_to_figure, distance_boundary_to_figure
 from modules.losses import (
     ApproachingMomentumLoss,
     RegionalCosineSimilarityLoss,
 )
+from modules.losses.boundary_loss import distance_transform
+from modules.losses.region_loss import self_cosine_similarity
 from modules.metrics import (
     AverageChamferDistance,
     QuantityMetricCollection,
 )
 from modules.metrics.quantity import match_nearest_boundaries
-from modules.syllable_splitter import SyllableSplitter
+from modules.midi_extraction import SegmentationModel
 from .data import BaseDataset
 from .pl_module_base import BaseLightningModule
 
-
-BOUNDARY_MATCHING_TOLERANCE = 5
+BOUNDARY_DROP_PROBABILITY = 0.8
 BOUNDARY_DECODING_THRESHOLD = 0.3
 BOUNDARY_DECODING_RADIUS = 2
+BOUNDARY_MATCHING_TOLERANCE = 5
 
 
-class SyllablesDataset(BaseDataset):
+class SegmentationDataset(BaseDataset):
     pass
 
 
-class SyllablesLightningModule(BaseLightningModule):
-    __dataset__ = SyllablesDataset
+class SegmentationLightningModule(BaseLightningModule):
+    __dataset__ = SegmentationDataset
 
     def build_model(self) -> nn.Module:
-        return SyllableSplitter(self.model_config)
+        return SegmentationModel(self.model_config)
 
     def register_losses_and_metrics(self) -> None:
         self.register_loss("region_loss", RegionalCosineSimilarityLoss(
@@ -54,34 +55,46 @@ class SyllablesLightningModule(BaseLightningModule):
 
     def forward_model(self, sample: dict[str, torch.Tensor], infer: bool) -> dict[str, torch.Tensor]:
         spectrogram = sample["spectrogram"]
-        language_ids = sample["language_id"]
-        if not infer:
-            language_ids = torch.where(
-                torch.rand(language_ids.shape, device=language_ids.device) < 0.5,
-                language_ids,
-                torch.zeros_like(language_ids)
-            )
+        if self.model_config.use_languages:
+            language_ids = sample["language_id"]
+            if not infer:
+                language_ids = torch.where(
+                    torch.rand(language_ids.shape, device=language_ids.device) < 0.5,
+                    language_ids,
+                    torch.zeros_like(language_ids)
+                )
+        else:
+            language_ids = None
         regions = sample["regions"]
         boundaries = sample["boundaries"]
         mask = regions != 0
 
-        features, velocities = self.model(spectrogram, language_ids, mask=mask)  # [B, T, T]
         if infer:
-            similarities = self_cosine_similarity(features)  # [B, T, T]
+            superregions = mask.long()  # a whole region
+        else:
+            superregions = merge_random_regions(regions, p=BOUNDARY_DROP_PROBABILITY)
+
+        velocities, latent = self.model(
+            spectrogram, regions=superregions,
+            language=language_ids, mask=mask
+        )  # [B, T]
+
+        if infer:
+            similarities = self_cosine_similarity(latent)  # [B, T, T]
             boundaries_pred = decode_boundaries_from_velocities(
-                velocities,
+                velocities, mask=mask,
                 threshold=BOUNDARY_DECODING_THRESHOLD,
                 radius=BOUNDARY_DECODING_RADIUS,
             )
-            self.metrics["average_chamfer_distance"](boundaries_pred, boundaries)
-            self.metrics["quantity_metric_collection"](boundaries_pred, boundaries)
+            self.metrics["average_chamfer_distance"].update(boundaries_pred, boundaries)
+            self.metrics["quantity_metric_collection"].update(boundaries_pred, boundaries)
             return {
                 "similarities": similarities,
                 "velocities": velocities,
                 "boundaries": boundaries_pred,
             }
         else:
-            region_loss = self.losses["region_loss"](features, regions)
+            region_loss = self.losses["region_loss"](latent, regions)
             boundary_loss = self.losses["boundary_loss"](velocities, boundaries, mask=mask)
             return {
                 "region_loss": region_loss,
@@ -139,23 +152,6 @@ class SyllablesLightningModule(BaseLightningModule):
             similarities, durations, title=title
         ), global_step=self.global_step)
 
-    def plot_boundaries(
-            self, idx: int,
-            boundaries_gt: torch.Tensor, boundaries_pred: torch.Tensor,
-            durations_gt: torch.Tensor = None, durations_pred: torch.Tensor = None,
-            title=None
-    ):
-        boundaries_gt = boundaries_gt.cpu().numpy()
-        boundaries_pred = boundaries_pred.cpu().numpy()
-        if durations_gt is not None:
-            durations_gt = durations_gt.cpu().numpy()
-        if durations_pred is not None:
-            durations_pred = durations_pred.cpu().numpy()
-        logger: TensorBoardLogger = self.logger
-        logger.experiment.add_figure(f"boundaries/boundaries_{idx}", boundary_to_figure(
-            boundaries_gt, boundaries_pred, dur_gt=durations_gt, dur_pred=durations_pred, title=title
-        ), global_step=self.global_step)
-
     def plot_distance(
             self, idx: int,
             distance_gt: torch.Tensor, distance_pred: torch.Tensor,
@@ -182,3 +178,31 @@ class SyllablesLightningModule(BaseLightningModule):
             boundaries_fn=boundaries_fn,
             title=title
         ), global_step=self.global_step)
+
+    def plot_boundaries(
+            self, idx: int,
+            boundaries_gt: torch.Tensor, boundaries_pred: torch.Tensor,
+            durations_gt: torch.Tensor = None, durations_pred: torch.Tensor = None,
+            title=None
+    ):
+        boundaries_gt = boundaries_gt.cpu().numpy()
+        boundaries_pred = boundaries_pred.cpu().numpy()
+        if durations_gt is not None:
+            durations_gt = durations_gt.cpu().numpy()
+        if durations_pred is not None:
+            durations_pred = durations_pred.cpu().numpy()
+        logger: TensorBoardLogger = self.logger
+        logger.experiment.add_figure(f"boundaries/boundaries_{idx}", boundary_to_figure(
+            boundaries_gt, boundaries_pred, dur_gt=durations_gt, dur_pred=durations_pred, title=title
+        ), global_step=self.global_step)
+
+
+def merge_random_regions(regions: torch.Tensor, p: float):
+    N = regions.max()
+    if N <= 1:
+        return regions.clone()
+    *B, _ = regions.shape
+    drops = torch.rand((*B, N - 1), device=regions.device) < p  # [..., N-1]
+    shifts = F.pad(drops.long().cumsum(dim=-1), (2, 0), mode="constant", value=0)  # [..., N+1]
+    regions_merged = regions - shifts.gather(dim=-1, index=regions)  # [..., T]
+    return regions_merged

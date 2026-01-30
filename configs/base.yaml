@@ -1,0 +1,100 @@
+binarizer:
+  validation_count: 100
+  num_workers: 8
+  features:
+    audio_sample_rate: 44100
+    hop_size: 441
+    fft_size: 2048
+    win_size: 2048
+    spectrogram:
+      type: mel
+      num_bins: 80
+      fmin: 0
+      fmax: 8000
+
+model:
+  embedding_dim: 256
+
+training:
+  augmentation:
+    pitch_shifting:
+      enabled: true
+      prob: 0.5
+      min_semitones: -12
+      max_semitones: 12
+    loudness_scaling:
+      enabled: true
+      prob: 0.5
+      min_db: -6
+      max_db: 6
+  dataloader:
+    max_batch_frames: 30000
+    max_batch_size: 32
+    max_val_batch_frames: 20000
+    max_val_batch_size: 16
+    frame_count_grid: 6
+    num_workers: 4
+    prefetch_factor: 2
+  optimizer:
+    cls: torch.optim.AdamW
+    kwargs:
+      lr: 0.0002
+      betas: [0.9, 0.98]
+      weight_decay: 0
+  lr_scheduler:
+    cls: torch.optim.lr_scheduler.StepLR
+    kwargs:
+      step_size: 5000
+      gamma: 0.8
+    unit: "step"
+  trainer:
+    unit: "step"
+    min_steps: 0
+    max_steps: 40000
+    min_epochs: 0
+    max_epochs: 1000
+    val_every_n_units: 2000
+    log_every_n_steps: 100
+    num_sanity_val_steps: 1
+    checkpoints:
+      - tag: "best"
+        type: "expression"
+        expression: "total_loss"
+        save_top_k: 5
+        mode: "min"
+        weights_only: false
+      - tag: "latest"
+        type: "periodic"
+        unit: "step"
+        every_n_units: 2000
+        since_m_units: 0
+        save_last_k: 2
+        weights_only: false
+    precision: "bf16-mixed"
+    accelerator: "auto"
+    devices: "auto"
+    num_nodes: 1
+    strategy:
+      name: "auto"
+      kwargs:
+        process_group_backend: nccl
+        find_unused_parameters: false
+    accumulate_grad_batches: 1
+    gradient_clip_val: 1.0
+  validation:
+    max_plots: 10
+  finetuning:
+    pretraining_enabled: true
+    pretraining_from: experiments/test-segmentation/model-latest-steps=0008000-epochs=0014.ckpt
+    pretraining_include_params: ["model.*"]
+    pretraining_exclude_params: []
+    freezing_enabled: false
+    freezing_include_params: []
+    freezing_exclude_params: []
+  weight_averaging:
+    ema_enabled: false
+    ema_decay: 0.999
+    ema_include_params: ["model.*"]
+    ema_exclude_params: []
+
+inference: {}

@@ -6,7 +6,7 @@ import dask
 from lib import logging
 from lib.config.formatter import ModelFormatter
 from lib.config.io import load_raw_config
-from lib.config.schema import RootConfig, BinarizerConfig
+from lib.config.schema import RootConfig, BinarizerConfig, ConfigurationScope
 
 __all__ = [
     "binarize_datasets",
@@ -37,11 +37,6 @@ def binarize_datasets(
     logging.success("Binarization completed.")
 
 
-@click.group(help="Binarize raw datasets.")
-def main():
-    pass
-
-
 def shared_options(func):
     options = [
         click.option(
@@ -62,20 +57,10 @@ def shared_options(func):
     return func
 
 
-@main.command(name="syllables", help="Binarize raw syllables datasets.")
+@click.command(help="Binarize raw notes datasets.")
 @shared_options
-def _binarize_syllables_datasets_cli(config: pathlib.Path, override: list[str]):
-    config = _load_and_log_config(config, overrides=override)
-    from preprocessing.syllables_binarizer import SyllablesBinarizer
-    binarize_datasets(
-        SyllablesBinarizer, config.binarizer
-    )
-
-
-@main.command(name="notes", help="Binarize raw notes datasets.")
-@shared_options
-def _binarize_notes_datasets_cli(config: pathlib.Path, override: list[str]):
-    config = _load_and_log_config(config, overrides=override)
+def main(config: pathlib.Path, override: list[str]):
+    config = _load_and_log_config(config, overrides=override, scope=ConfigurationScope.ESTIMATION)
     from preprocessing.notes_binarizer import NotesBinarizer
     binarize_datasets(
         NotesBinarizer, config.binarizer
