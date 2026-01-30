@@ -32,8 +32,8 @@ model:
   estimator:
     cls: "modules.backbones.EBF.EBFBackbone"
     kwargs:
-      dim: 256
-      num_layers: 2
+      dim: 512
+      num_layers: 4
       num_heads: 8
       head_dim: 64
       c_kernel_size: 7
