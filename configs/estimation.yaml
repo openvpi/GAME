@@ -56,10 +56,5 @@ training:
     region_loss:
       neighborhood_size: 5
       exponential_decay: true
-    boundary_loss:
-      constant_radius: 20
-      cutoff_radius: 40
-      decay_power: 2.0
-      decay_alpha: 0.5
     note_loss:
       deviation: 1.0
