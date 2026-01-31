@@ -85,6 +85,95 @@ def decode_note_vernier(pred_vec, config: NoteVernierConfig):
     return note, pred_uv
 
 
+def decode_vernier_modulo(pred_vec, config):
+    """
+    版本 B: 取模解缠 (Modulo Unwrapping)
+    核心: diff = remainder(diff + P/2, P) - P/2
+    缺点: remainder 在边界处梯度不连续，偶尔会有数值精度坑。
+    """
+    # 1. MSE 基准
+    cfg = config
+
+    uv_prob = torch.sigmoid(pred_vec[..., 0])
+    pred_uv = (uv_prob > 0.5)
+
+
+    # norm_scale = cfg.note_max - cfg.note_min
+    # curr_val = pred_vec[..., 1] * norm_scale + cfg.note_min
+    note = torch.sigmoid(pred_vec[..., 1]) * (cfg.note_max - cfg.note_min) + cfg.note_min
+    start_idx = 2
+    for period in cfg.periods:
+        v = F.normalize(pred_vec[..., start_idx:start_idx + 2], dim=-1)
+        phase = torch.atan2(v[..., 0], v[..., 1])
+        # 模型预测的圆环位置
+        val_pred = (phase / (2 * np.pi)) * period
+
+        # 当前猜测的圆环位置 (取模)
+        # 注意：这里要处理 curr_val 为负数的情况，Python % 和 torch.remainder 行为略有不同
+        # 建议用 torch.remainder
+        curr_mod = torch.remainder(note, period)
+
+        # 计算差值
+        diff = val_pred - curr_mod
+
+        # 核心逻辑：把差值折叠到 [-period/2, period/2]
+        # 这是一个锯齿波函数
+        diff = torch.remainder(diff + period / 2, period) - period / 2
+
+        # 更新
+        note = note + diff
+
+        start_idx += 2
+
+    return note, pred_uv
+
+
+def decode_vernier_analytic(pred_vec, config):
+    """
+    版本 C: 几何解析解 (Geometric Projection)
+    核心: delta = atan2(cross_product, dot_product)
+    优点: 全程平滑可导 (Sin/Cos/Atan2)，无锯齿，无离散跳变。
+    """
+
+    cfg = config
+
+    uv_prob = torch.sigmoid(pred_vec[..., 0])
+    pred_uv = (uv_prob > 0.5)
+
+    # 1. MSE 基准
+    # norm_scale = config.note_max - config.note_min
+    # curr_val = pred_vec[..., 1] * norm_scale + config.note_min
+    note = torch.sigmoid(pred_vec[..., 1]) * (cfg.note_max - cfg.note_min) + cfg.note_min
+    start_idx = 2
+    for period in config.periods:
+        # A. 预测向量 (Target)
+        v_pred = F.normalize(pred_vec[..., start_idx:start_idx + 2], dim=-1)
+        sin_p, cos_p = v_pred[..., 0], v_pred[..., 1]
+
+        # B. 当前猜测向量 (Current Guess)
+        # 把直线卷起来变成向量
+        phase_curr = (note / period) * 2 * np.pi
+        sin_c, cos_c = torch.sin(phase_curr), torch.cos(phase_curr)
+
+        # C. 计算向量夹角 (Rotation)
+        # sin(a - b) = sin(a)cos(b) - cos(a)sin(b)
+        sin_delta = sin_p * cos_c - cos_p * sin_c
+        # cos(a - b) = cos(a)cos(b) + sin(a)sin(b)
+        cos_delta = cos_p * cos_c + sin_p * sin_c
+
+        # atan2 自动找最短路径 [-pi, pi]
+        delta_phase = torch.atan2(sin_delta, cos_delta)
+
+        # D. 线性投影
+        delta_val = (delta_phase / (2 * np.pi)) * period
+
+        # 更新
+        note = note + delta_val
+
+        start_idx += 2
+
+    return note, pred_uv
+
 @dataclass
 class NoteGaussianBinVernierConfig:
     """Gaussian Bin + Vernier 配置"""
