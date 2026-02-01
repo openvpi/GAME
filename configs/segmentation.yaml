@@ -36,10 +36,11 @@ training:
       neighborhood_size: 5
       exponential_decay: true
     boundary_loss:
-      constant_radius: 20
-      cutoff_radius: 40
-      decay_power: 2.0
+      radius: 20
+      decay_start: 20
+      decay_width: 20
       decay_alpha: 0.5
+      decay_power: 2.0
   validation:
     boundary_drop_probability: 0.8
     boundary_decoding_threshold: 0.3

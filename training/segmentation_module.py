@@ -82,7 +82,7 @@ class SegmentationLightningModule(BaseLightningModule):
             similarities = self_cosine_similarity(latent)  # [B, T, T]
             boundaries_pred = decode_boundaries_from_velocities(
                 velocities, mask=mask,
-                threshold=self.training_config.validation.note_decoding_threshold,
+                threshold=self.training_config.validation.boundary_decoding_threshold,
                 radius=self.training_config.validation.boundary_decoding_radius,
             )
             self.metrics["average_chamfer_distance"].update(boundaries_pred, boundaries)
@@ -122,11 +122,10 @@ class SegmentationLightningModule(BaseLightningModule):
 
             distance_gt = distance_transform(boundaries, max_distance=self.training_config.loss.boundary_loss.radius)
             distance_pred = velocities.cumsum(dim=0)
-            d_min = distance_pred.min()
-            d_max = distance_pred.max()
-            threshold_denorm = (
-                    self.training_config.validation.note_presence_threshold * (d_max - d_min + 1e-8) + d_min
-            ).cpu().numpy().item()
+            threshold = self.training_config.validation.boundary_decoding_threshold
+            d_min = distance_pred.min().cpu().numpy().item()
+            d_max = distance_pred.max().cpu().numpy().item()
+            threshold_denorm = threshold * (d_max - d_min + 1e-8) + d_min
 
             self.plot_regions(
                 data_idx, similarities, durations,
