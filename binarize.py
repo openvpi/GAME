@@ -6,7 +6,7 @@ import dask
 from lib import logging
 from lib.config.formatter import ModelFormatter
 from lib.config.io import load_raw_config
-from lib.config.schema import RootConfig, BinarizerConfig, ConfigurationScope
+from lib.config.schema import RootConfig, BinarizerConfig
 
 __all__ = [
     "binarize_datasets",
@@ -60,7 +60,7 @@ def shared_options(func):
 @click.command(help="Binarize raw notes datasets.")
 @shared_options
 def main(config: pathlib.Path, override: list[str]):
-    config = _load_and_log_config(config, overrides=override, scope=ConfigurationScope.ESTIMATION)
+    config = _load_and_log_config(config, overrides=override)
     from preprocessing.notes_binarizer import NotesBinarizer
     binarize_datasets(
         NotesBinarizer, config.binarizer
