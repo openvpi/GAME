@@ -422,11 +422,11 @@ class GeneratorEBFBackbone(nn.Module):
         if self.use_out_norm:
             self.output_norm = RMSnorm(dim)
         self.output_proj = nn.Linear(dim, out_dim)  # -> [B, T, C_out]
-        self.time_proj=nn.Sequential(
-            nn.Linear(1, dim * 4),
-            nn.GELU(),
-            nn.Linear(dim * 4, dim)
-        )
+        # self.time_proj=nn.Sequential(
+        #     nn.Linear(1, dim * 4),
+        #     nn.GELU(),
+        #     nn.Linear(dim * 4, dim)
+        # )
 
     def forward(self, x,times, mask=None):
         """
@@ -439,11 +439,12 @@ class GeneratorEBFBackbone(nn.Module):
             out: [B, T, C_out] output tensor
         """
         x = self.input_proj(x)
-        time_emb=self.time_proj(times.unsqueeze(-1))
+        # time_emb=self.time_proj(times.unsqueeze(-1))
 
         latent = None
         for i, layer in enumerate(self.layers):
-            x = layer(x+time_emb, mask=mask)
+            x = layer(x, mask=mask)
+            # x = layer(x + time_emb, mask=mask)
             if self.return_latent and i == self.latent_layer_idx - 1:
                 latent = self.latent_norm(x)
                 latent = self.latent_proj(latent)  # [B, T, C_latent]

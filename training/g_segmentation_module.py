@@ -56,27 +56,17 @@ class GSegmentationLightningModule(BaseLightningModule):
     def build_input(self, regions: torch.Tensor):
         r_time = torch.rand(regions.shape[0], 1, device=regions.device)
         pm = (torch.cos(torch.pi * r_time) + 1) / 2
-        s_start = 0.125
-        s_end = 0.875
-        add_s_p = 0.5
-
         m_regions = batch_merge_random_regions(regions, pm)
-        s_regions = batch_split_random_regions(m_regions, pm)
-        pa = torch.rand(regions.shape[0], 1, device=regions.device)
-        s_regions = torch.where(pa < add_s_p, s_regions, m_regions)
-        s_regions = torch.where((r_time >= s_start) & (r_time <= s_end), s_regions, m_regions)
 
-        return s_regions, r_time
+        return m_regions, r_time
 
-    def diff_infer(self, spectrogram, regions, language_ids=None, mask=None, infer_time_step=10, start_sigma=0.0,
-                   end_sigma=0.3,add_noise=True):
+    def diff_infer(self, spectrogram, regions, language_ids=None, mask=None, infer_time_step=20, ):
         B = regions.shape[0]
         time_step = 1 / infer_time_step
         time_step_t = torch.tensor(time_step, device=regions.device).expand(B, 1)
         for i in range(infer_time_step):
 
-            sigma_t = start_sigma + (end_sigma - start_sigma) * (
-                        (torch.cos(torch.pi * (time_step_t * i).clamp(min=0, max=1)) + 1) / 2)
+
 
             velocities, latent = self.model(
                 spectrogram, regions=regions, times=time_step_t * i,
@@ -97,18 +87,11 @@ class GSegmentationLightningModule(BaseLightningModule):
                 boundaries_pred, conf = decode_boundaries_from_velocities_with_confidences(velocities, mask=mask,
                                                                                           threshold=self.training_config.validation.boundary_decoding_threshold,
                                                                                           radius=self.training_config.validation.boundary_decoding_radius)
-                if add_noise:
-                    conf=conf+torch.randn_like(conf)*sigma_t
-                    conf=conf.clamp(0,1)
-                    conf=boundaries_pred.float()*conf
 
-                # values, indices = torch.topk(x, k, dim=-1, largest=True)
-                keep_ratio = (i + 1) / infer_time_step
-                num_candidates = boundaries_pred.float().sum(dim=-1)  # [B]
-                k_dynamic = (num_candidates.float() * keep_ratio).long()  # [B]
-                ranks = conf.argsort(dim=-1, descending=True).argsort(dim=-1)  # [B, T]
-                keep_mask = ranks < k_dynamic.unsqueeze(-1)  # [B, T]
-                final_boundaries = boundaries_pred & keep_mask
+                keep_prop=(torch.cos(torch.pi * time_step_t*(i+1)) + 1) / 2
+                kp=torch.rand_like(boundaries_pred.float())*boundaries_pred.float()
+                keep_mask=kp>keep_prop
+                final_boundaries=boundaries_pred&keep_mask
                 cr=torch.cumsum(final_boundaries.float(),dim=-1)+1
                 if mask is not None:
                     regions=cr*mask

@@ -21,7 +21,7 @@ model:
       head_dim: 64
       c_kernel_size: 31
       m_kernel_size: 31
-      ffn_type: 'ffn' # 'glu', 'ffn', 'cgmlp'
+      ffn_type: 'glu' # 'glu', 'ffn', 'cgmlp'
       ffn_latent_drop: 0.0
       ffn_out_drop: 0.1
       use_ls: true
