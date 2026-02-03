@@ -371,3 +371,88 @@ class EBFBackbone(nn.Module):
             return out, latent
         else:
             return out
+
+
+class GeneratorEBFBackbone(nn.Module):
+    def __init__(
+            self, in_dim: int, out_dim: int, return_latent: bool,
+            dim: int = 256,
+            num_layers: int = 8,
+            latent_layer_idx: int = None,
+            latent_out_dim: int = 16,
+            num_heads: int = 8,
+            head_dim: int = 64,
+            c_kernel_size: int = 31,
+            m_kernel_size: int = 31,
+            use_rope: bool = True,
+            rope_cache: bool = True,
+            dropout_attn: float = 0.0,
+            out_drop: float = 0.0,
+            c_out_drop: float = 0.1,
+            c_latent_drop: float = 0.0,
+            use_ls: bool = True,
+            ffn_type: str = 'glu',
+            ffn_latent_drop: float = 0.1,
+            ffn_out_drop: float = 0.1,
+            use_out_norm: bool = True,
+    ):
+        super().__init__()
+        self.use_out_norm = use_out_norm
+        self.return_latent = return_latent
+        if return_latent:
+            assert latent_layer_idx <= num_layers
+        self.latent_layer_idx = latent_layer_idx
+
+        self.input_proj = nn.Linear(in_dim, dim)
+
+        self.layers = nn.ModuleList([
+            EBF(dim=dim, num_heads=num_heads, head_dim=head_dim,
+                c_kernel_size=c_kernel_size, m_kernel_size=m_kernel_size,
+                use_rope=use_rope, rope_cache=rope_cache,
+                dropout_attn=dropout_attn, out_drop=out_drop,
+                c_out_drop=c_out_drop, c_latent_drop=c_latent_drop,
+                use_ls=use_ls, ffn_type=ffn_type,
+                ffn_latent_drop=ffn_latent_drop, ffn_out_drop=ffn_out_drop)
+            for _ in range(num_layers)
+        ])
+
+        if self.return_latent:
+            self.latent_norm = RMSnorm(dim)
+            self.latent_proj = nn.Linear(dim, latent_out_dim)  # -> [B, T, C_latent]
+        if self.use_out_norm:
+            self.output_norm = RMSnorm(dim)
+        self.output_proj = nn.Linear(dim, out_dim)  # -> [B, T, C_out]
+        self.time_proj=nn.Sequential(
+            nn.Linear(1, dim * 4),
+            nn.GELU(),
+            nn.Linear(dim * 4, dim)
+        )
+
+    def forward(self, x,times, mask=None):
+        """
+        Args:
+            time_emb: [B, T, C] time embedding
+            x: [B, T, in_dim] input tensor
+            mask: [B, T] valid mask
+        Returns:
+            latent: [B, T, C_latent] intermediate latent tensor for self cosine similarity
+            out: [B, T, C_out] output tensor
+        """
+        x = self.input_proj(x)
+        time_emb=self.time_proj(times.unsqueeze(-1))
+
+        latent = None
+        for i, layer in enumerate(self.layers):
+            x = layer(x+time_emb, mask=mask)
+            if self.return_latent and i == self.latent_layer_idx - 1:
+                latent = self.latent_norm(x)
+                latent = self.latent_proj(latent)  # [B, T, C_latent]
+
+        if self.use_out_norm:
+            x = self.output_norm(x)
+        out = self.output_proj(x)  # [B, T, C_out]
+
+        if self.return_latent:
+            return out, latent
+        else:
+            return out

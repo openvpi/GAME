@@ -5,6 +5,39 @@ from lib.reflection import build_object_from_class_name
 from modules.commons.common_layers import CyclicRegionEmbedding, LocalDownsample
 
 
+class GeneratorSegmentationModel(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.spectrogram_projection = nn.Linear(config.in_channels, config.embedding_dim)
+        self.region_embedding = CyclicRegionEmbedding(
+            config.embedding_dim,
+            cycle_length=config.region_cycle_len
+        )
+        self.use_language_embedding = config.use_languages
+        if self.use_language_embedding:
+            self.language_embedding = nn.Embedding(config.num_languages + 1, config.embedding_dim, padding_idx=0)
+        self.segmenter = build_object_from_class_name(
+            config.segmenter.cls, nn.Module,
+            config.embedding_dim, 1, True,
+            **config.segmenter.kwargs
+        )
+        self.time_embedding = nn.Sequential(
+            nn.Linear(1, config.embedding_dim * 4),
+            nn.GELU(),
+            nn.Linear(config.embedding_dim * 4, config.embedding_dim)
+        )
+
+    def forward(self, spectrogram, regions, times, language=None, mask=None):
+        x = self.spectrogram_projection(spectrogram) + self.region_embedding(regions)
+        if self.use_language_embedding:
+            x = x + self.language_embedding(language.unsqueeze(-1))
+        time_emb=self.time_embedding(times.unsqueeze(-1))
+        x = x + time_emb
+        x, latent = self.segmenter(x,times, mask=mask)
+        velocities = x.squeeze(-1).tanh()
+        return velocities, latent
+
+
 class SegmentationModel(nn.Module):
     def __init__(self, config: ModelConfig):
         super().__init__()

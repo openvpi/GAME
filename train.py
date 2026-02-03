@@ -202,6 +202,7 @@ def _get_config_scope(key: str) -> int:
     scopes = {
         "segmentation": ConfigurationScope.SEGMENTATION,
         "estimation": ConfigurationScope.ESTIMATION,
+        "gsegmentation": ConfigurationScope.SEGMENTATION,
     }
     if key in scopes:
         return scopes[key]
@@ -212,6 +213,9 @@ def _get_lightning_module_cls(key: str):
     if key == "segmentation":
         from training.segmentation_module import SegmentationLightningModule
         return SegmentationLightningModule
+    if key == "gsegmentation":
+        from training.g_segmentation_module import GSegmentationLightningModule
+        return GSegmentationLightningModule
     elif key == "estimation":
         from training.estimation_module import EstimationLightningModule
         return EstimationLightningModule
@@ -320,7 +324,22 @@ def shared_options(func):
     for option in options[::-1]:
         func = option(func)
     return func
-
+@main.command(name="gsegmentation", help="Train a gsegmentation model.")
+@shared_options
+def _train_segmentation_cli(
+        config: pathlib.Path, override: list[str],
+        exp_name: str, work_dir: pathlib.Path,
+        log_dir: pathlib.Path,
+        restart: bool,
+        resume_from: pathlib.Path,
+):
+    _exec_training(
+        recipe_key="gsegmentation",
+        config=config, override=override,
+        exp_name=exp_name, work_dir=work_dir,
+        log_dir=log_dir,
+        restart=restart, resume_from=resume_from,
+    )
 
 @main.command(name="segmentation", help="Train a segmentation model.")
 @shared_options

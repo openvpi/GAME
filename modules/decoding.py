@@ -58,6 +58,43 @@ def decode_boundaries_from_velocities(
         boundaries &= mask
     return boundaries
 
+def decode_boundaries_from_velocities_with_confidences(
+        velocities: Tensor, barriers: Tensor = None, mask: Tensor = None,
+        threshold: float = 0.2, radius: int = 2
+):
+    """
+    Decode boundary indicators from predicted velocities. Steps:
+        1. Accumulate velocities to get distances.
+        2. Apply min-max normalization to distances.
+        3. Find local minima in distances that are below the threshold.
+    :param velocities: [..., T]
+    :param barriers: [..., T],optional preset boundaries or local minima points
+    :param mask: [..., T], optional mask to apply before decoding
+    :param threshold: float (0~1), velocity threshold (after normalization) to consider a boundary
+    :param radius: int, radius for local minima search
+    :return: [..., T], 1 = boundary, 0 = non-boundary
+    """
+    distances = velocities.cumsum(dim=-1)
+    if mask is not None:
+        distances_upper_masked = torch.where(mask, distances, float("+inf"))
+        distances_lower_masked = torch.where(mask, distances, float("-inf"))
+    else:
+        distances_upper_masked = distances
+        distances_lower_masked = distances
+    d_min = distances_upper_masked.amin(dim=-1, keepdim=True)
+    d_max = distances_lower_masked.amax(dim=-1, keepdim=True)
+    distances = (distances - d_min) / (d_max - d_min + 1e-8)
+    confidences=1-distances
+    if mask is not None:
+        distances = torch.where(mask, distances, float("-inf"))
+    if barriers is not None:
+        distances = torch.masked_fill(distances, barriers, float("-inf"))
+    boundaries = find_local_minima(distances, threshold=threshold, radius=radius)  # [..., T]
+    if mask is not None:
+        boundaries &= mask
+    confidences=confidences*boundaries
+    confidences = confidences.clamp(0.0, 1.0)
+    return boundaries,confidences
 
 def decode_quantized_boundaries(boundaries: Tensor):
     """
