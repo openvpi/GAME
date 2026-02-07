@@ -262,8 +262,8 @@ class EBF(nn.Module):
                 out_drop=ffn_out_drop, kernel_size=7
             )
         elif ffn_type == 'eglu':
-            self.ffn1 =HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0)
-            self.ffn2 =HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0)
+            self.ffn1 =HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0,bias=True)
+            self.ffn2 =HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0,bias=True)
 
         else:
             raise ValueError(f"Unknown ffn_type: {ffn_type}")
