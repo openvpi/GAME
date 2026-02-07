@@ -24,8 +24,6 @@ from modules.midi_extraction import SegmentationModel
 from .data import BaseDataset
 from .pl_module_base import BaseLightningModule
 
-D3PM_SAMPLE_STEPS = 20
-
 
 class SegmentationDataset(BaseDataset):
     pass
@@ -72,68 +70,81 @@ class SegmentationLightningModule(BaseLightningModule):
         mask = regions != 0
 
         if infer:
-            latent = None
-            velocities = None
-            boundaries_pred = None
-            timestep = torch.full(
-                (B,), fill_value=1 / D3PM_SAMPLE_STEPS,
-                dtype=torch.float32, device=regions.device
-            )
-            regions_pred = mask.long()  # initialize with a whole region
-            for i in range(D3PM_SAMPLE_STEPS):
-                t = i * timestep
-                p = self.d3pm_time_schedule(t)
-                noise = self.d3pm_noise(regions_pred, p=p)  # [B, T]
+            if self.model_config.mode == "d3pm":
+                # 1. Initialize with a whole region.
+                # 2. Merge regions by p(t) before each step.
+                # 3. Predict full regions.
+                latent = None
+                velocities = None
+                boundaries_pred = None
+                num_steps = self.training_config.validation.d3pm_sample_steps
+                timestep = torch.full(
+                    (B,), fill_value=1 / num_steps,
+                    dtype=torch.float32, device=regions.device
+                )
+                regions_pred = mask.long()
+                for i in range(num_steps):
+                    t = i * timestep
+                    noise = d3pm_noise(regions_pred, t=t)  # [B, T]
+                    velocities, latent = self.model(
+                        spectrogram, regions=noise, t=t,
+                        language=language_ids, mask=mask,
+                    )  # [B, T]
+                    boundaries_pred = decode_boundaries_from_velocities(
+                        velocities, mask=mask,
+                        threshold=self.training_config.validation.boundary_decoding_threshold,
+                        radius=self.training_config.validation.boundary_decoding_radius,
+                    )
+                    regions_pred = (boundaries_pred.long().cumsum(dim=-1) + 1) * mask.long()
+            elif self.model_config.mode == "completion":
+                # One-step prediction from a whole region.
                 velocities, latent = self.model(
-                    spectrogram, regions=noise, t=t,
-                    language=language_ids, mask=mask
+                    spectrogram, regions=mask.long(),
+                    language=language_ids, mask=mask,
                 )  # [B, T]
                 boundaries_pred = decode_boundaries_from_velocities(
                     velocities, mask=mask,
                     threshold=self.training_config.validation.boundary_decoding_threshold,
                     radius=self.training_config.validation.boundary_decoding_radius,
                 )
-                regions_pred = (boundaries_pred.long().cumsum(dim=-1) + 1) * mask.long()
+            else:
+                raise ValueError(f"Unknown mode: {self.model_config.mode}.")
+
             similarities = self_cosine_similarity(latent)  # [B, T, T]
+
             self.metrics["average_chamfer_distance"].update(boundaries_pred, boundaries)
             self.metrics["quantity_metric_collection"].update(boundaries_pred, boundaries)
+
             return {
                 "similarities": similarities,
                 "velocities": velocities,
                 "boundaries": boundaries_pred,
             }
         else:
-            t = torch.rand(B, device=spectrogram.device)
-            p = self.d3pm_time_schedule(t)  # [B]
-            noise = self.d3pm_noise(regions, p=p)  # [B, T]
+            if self.model_config.mode == "d3pm":
+                # Choose random t, merge regions by p(t)
+                t = torch.rand(B, device=spectrogram.device)
+                noise = d3pm_noise(regions, t=t)  # [B, T]
+            elif self.model_config.mode == "completion":
+                # Choose random p, merge regions by p
+                t = None
+                p = torch.randn(B, device=spectrogram.device)
+                noise = merge_random_regions(regions, p=p)
+            else:
+                raise ValueError(f"Unknown mode: {self.model_config.mode}.")
+
             velocities, latent = self.model(
                 spectrogram, regions=noise, t=t,
-                language=language_ids, mask=mask
+                language=language_ids, mask=mask,
             )  # [B, T]
+
             region_loss = self.losses["region_loss"](latent, regions)
             boundary_loss = self.losses["boundary_loss"](velocities, boundaries, mask=mask)
+
             return {
                 "region_loss": region_loss,
                 "boundary_loss": boundary_loss,
             }
-
-    def d3pm_time_schedule(self, t: torch.Tensor) -> torch.Tensor:
-        """
-        :param t: time, [B] 0~1
-        :return: p [B] 0~1
-        """
-        p = (torch.cos(t * torch.pi) + 1) / 2
-        return p
-
-    def d3pm_noise(self, regions: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
-        """
-        :param regions: [B, T]
-        :param p: [B]
-        :return: noised regions [B, T]
-        """
-        regions = merge_random_regions(regions, p)
-        regions = split_random_regions(regions, p)
-        return regions
 
     def plot_validation_results(self, sample: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor]) -> None:
         for i in range(len(sample["indices"])):
@@ -230,6 +241,12 @@ class SegmentationLightningModule(BaseLightningModule):
         logger.experiment.add_figure(f"boundaries/boundaries_{idx}", boundary_to_figure(
             boundaries_gt, boundaries_pred, dur_gt=durations_gt, dur_pred=durations_pred, title=title
         ), global_step=self.global_step)
+
+
+def d3pm_noise(regions: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    p = (1 + torch.cos(t * torch.pi)) / 2
+    regions = merge_random_regions(regions, p=p)
+    return regions
 
 
 def merge_random_regions(regions: torch.Tensor, p: torch.Tensor):

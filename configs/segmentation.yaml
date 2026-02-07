@@ -6,6 +6,7 @@ binarizer:
   data_dir: "data/notes"
 
 model:
+  mode: d3pm
   use_languages: true
   num_languages: 127
   embedding_dim: 256
@@ -42,7 +43,7 @@ training:
       decay_alpha: 0.5
       decay_power: 2.0
   validation:
-    boundary_drop_probability: 0.8
+    d3pm_sample_steps: 5
     boundary_decoding_threshold: 0.3
     boundary_decoding_radius: 2
     boundary_matching_tolerance: 5

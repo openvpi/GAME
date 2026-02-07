@@ -78,6 +78,9 @@ class BackboneConfig(ConfigBaseModel):
 
 
 class ModelConfig(ConfigBaseModel):
+    mode: Literal["completion", "d3pm"] = Field("d3pm", json_schema_extra={
+        "scope": ConfigurationScope.SEGMENTATION
+    })
     use_languages: bool = Field(True, json_schema_extra={
         "scope": ConfigurationScope.SEGMENTATION
     })
@@ -286,6 +289,9 @@ class TrainerConfig(ConfigBaseModel):
 class ValidationConfig(ConfigBaseModel):
     max_plots: int = Field(100, ge=0)
     boundary_drop_probability: float = Field(0.8, gt=0, le=1, json_schema_extra={
+        "scope": ConfigurationScope.SEGMENTATION
+    })
+    d3pm_sample_steps: int = Field(5, gt=0, json_schema_extra={
         "scope": ConfigurationScope.SEGMENTATION
     })
     boundary_decoding_threshold: float = Field(0.3, gt=0, le=1, json_schema_extra={
