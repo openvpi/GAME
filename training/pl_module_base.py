@@ -46,9 +46,14 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.val_losses: dict[str, Metric] = {  # use built-in dict to not be printed in the model summary
             "total_loss": MeanMetric()
         }
+        self.use_parallel_dirty_metrics = (
+                self.training_config.augmentation.has_destructive_augmentations
+                and self.training_config.validation.parallel_dirty_metrics
+        )
         self.register_losses_and_metrics()
         if len(self.losses) == 0:
             raise ValueError("No losses defined.")
+
         self.freeze_parameters()  # caution: this can break when resuming training
 
         self.use_ema = self.training_config.weight_averaging.ema_enabled
@@ -207,7 +212,16 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         """
         Build the validation dataset.
         """
-        return self.__dataset__(self.data_dir, "valid")
+        if self.use_parallel_dirty_metrics:
+            return self.__dataset__(
+                self.data_dir, "valid",
+                augmentation_config=self.training_config.augmentation,
+                augmentation_deterministic=True,
+                augmentation_skip_transforms=True,
+                augmentation_return_dirty=True,
+            )
+        else:
+            return self.__dataset__(self.data_dir, "valid")
 
     def setup(self, stage: str) -> None:
         if stage != "fit":

@@ -52,13 +52,20 @@ class EstimationLightningModule(BaseLightningModule):
         self.register_loss("note_dial_loss", CascadedDialCaliperLoss(
             periods=self.training_config.loss.note_loss.dial_periods,
         ))
-        self.register_metric("presence_metric_collection", NotePresenceMetricCollection())
-        self.register_metric("raw_pitch_rmse", RawPitchRMSE())
+        self._register_metrics()
+        if self.use_parallel_dirty_metrics:
+            self._register_metrics(postfix="_dirty")
+
+    def _register_metrics(self, postfix: str = ""):
+        self.register_metric(f"presence_metric_collection{postfix}", NotePresenceMetricCollection(
+            postfix=postfix
+        ))
+        self.register_metric(f"raw_pitch_rmse{postfix}", RawPitchRMSE())
         for tol in self.training_config.validation.note_accuracy_tolerances:
-            self.register_metric(f"raw_pitch_accuracy_{100 * tol:.0f}cents", RawPitchAccuracy(
+            self.register_metric(f"raw_pitch_accuracy_{100 * tol:.0f}cents{postfix}", RawPitchAccuracy(
                 tolerance=tol,
             ))
-            self.register_metric(f"overall_accuracy_{100 * tol:.0f}cents", OverallAccuracy(
+            self.register_metric(f"overall_accuracy_{100 * tol:.0f}cents{postfix}", OverallAccuracy(
                 tolerance=tol,
             ))
 
@@ -72,51 +79,42 @@ class EstimationLightningModule(BaseLightningModule):
         scores = sample["scores"]
         presence = sample["presence"]
 
-        min_val = self.training_config.loss.note_loss.midi_min
-        max_val = self.training_config.loss.note_loss.midi_max
-        num_dials = len(self.training_config.loss.note_loss.dial_periods)
-
-        estimations, latent = self.model(
-            spectrogram, regions=regions, max_n=max_n,
-            t_mask=t_mask, n_mask=n_mask,
-        )  # [B, N, C_out]
-        presence_logits = estimations[:, :, 0]  # [B, N]
-        beam_norm_pred = estimations[:, :, 1]  # [B, N]
-        dials_pred = estimations[:, :, 2:].reshape(-1, max_n, num_dials, 2)  # [B, N, num_dials, 2]
-
         if infer:
-            presence_pred = presence_logits.sigmoid() >= self.training_config.validation.note_presence_threshold
-            beam_pred = beam_norm_pred * (max_val - min_val) + min_val
-            scores_pred = decode_cascaded_dial_pointers(
-                beam=beam_pred,
-                dials=dials_pred,
-                periods=self.training_config.loss.note_loss.dial_periods,
-            )
             weights = durations.clamp(min=0).float()
-            self.metrics["presence_metric_collection"].update(
-                presence_pred, presence, weights=weights, mask=n_mask,
+            presence_pred, scores_pred = self._forward_infer(
+                spectrogram, regions=regions,
+                max_n=max_n, t_mask=t_mask, n_mask=n_mask
             )
-            self.metrics["raw_pitch_rmse"].update(
-                pred_scores=scores_pred,
-                target_scores=scores, target_presence=presence,
+            self._update_metrics(
+                presence_pred=presence_pred, scores_pred=scores_pred,
+                presence_gt=presence, scores_gt=scores,
                 weights=weights, mask=n_mask,
             )
-            for tol in self.training_config.validation.note_accuracy_tolerances:
-                self.metrics[f"raw_pitch_accuracy_{100 * tol:.0f}cents"].update(
-                    pred_scores=scores_pred,
-                    target_scores=scores, target_presence=presence,
-                    weights=weights, mask=n_mask,
+
+            if self.use_parallel_dirty_metrics:
+                presence_pred_dirty, scores_pred_dirty = self._forward_infer(
+                    sample["spectrogram_dirty"], regions=regions,
+                    max_n=max_n, t_mask=t_mask, n_mask=n_mask
                 )
-                self.metrics[f"overall_accuracy_{100 * tol:.0f}cents"].update(
-                    pred_scores=scores_pred, pred_presence=presence_pred,
-                    target_scores=scores, target_presence=presence,
+                self._update_metrics(
+                    presence_pred=presence_pred_dirty, scores_pred=scores_pred_dirty,
+                    presence_gt=presence, scores_gt=scores,
                     weights=weights, mask=n_mask,
+                    postfix="_dirty"
                 )
+
             return {
                 "scores": scores_pred,
                 "presence": presence_pred,
             }
         else:
+            presence_logits, beam_norm_pred, dials_pred, latent = self._forward(
+                spectrogram, regions=regions,
+                max_n=max_n, t_mask=t_mask, n_mask=n_mask
+            )
+
+            min_val = self.training_config.loss.note_loss.midi_min
+            max_val = self.training_config.loss.note_loss.midi_max
             region_adapt_loss = self.losses["region_adapt_loss"](latent, regions)
             if not n_mask.any():
                 note_presence_loss = torch.tensor(0.0, device=presence_logits.device)
@@ -141,6 +139,54 @@ class EstimationLightningModule(BaseLightningModule):
                 "note_beam_loss": note_beam_loss,
                 "note_dial_loss": note_dial_loss,
             }
+
+    def _forward(self, spectrogram, regions, max_n, t_mask, n_mask):
+        num_dials = len(self.training_config.loss.note_loss.dial_periods)
+        estimations, latent = self.model(
+            spectrogram, regions=regions, max_n=max_n,
+            t_mask=t_mask, n_mask=n_mask,
+        )  # [B, N, C_out]
+        presence_logits = estimations[:, :, 0]  # [B, N]
+        beam_norm = estimations[:, :, 1]  # [B, N]
+        dials = estimations[:, :, 2:].reshape(-1, max_n, num_dials, 2)  # [B, N, num_dials, 2]
+        return presence_logits, beam_norm, dials, latent
+
+    def _forward_infer(self, spectrogram, regions, max_n, t_mask, n_mask):
+        presence_logits, beam_norm, dials, latent = self._forward(
+            spectrogram, regions=regions,
+            max_n=max_n, t_mask=t_mask, n_mask=n_mask
+        )
+        min_val = self.training_config.loss.note_loss.midi_min
+        max_val = self.training_config.loss.note_loss.midi_max
+        presence = presence_logits.sigmoid() >= self.training_config.validation.note_presence_threshold
+        beam = beam_norm * (max_val - min_val) + min_val
+        scores = decode_cascaded_dial_pointers(
+            beam=beam,
+            dials=dials,
+            periods=self.training_config.loss.note_loss.dial_periods,
+        )
+        return presence, scores
+
+    def _update_metrics(self, presence_pred, scores_pred, presence_gt, scores_gt, weights, mask, postfix=""):
+        self.metrics[f"presence_metric_collection{postfix}"].update(
+            presence_pred, presence_gt, weights=weights, mask=mask,
+        )
+        self.metrics[f"raw_pitch_rmse{postfix}"].update(
+            pred_scores=scores_pred,
+            target_scores=scores_gt, target_presence=presence_gt,
+            weights=weights, mask=mask,
+        )
+        for tol in self.training_config.validation.note_accuracy_tolerances:
+            self.metrics[f"raw_pitch_accuracy_{100 * tol:.0f}cents{postfix}"].update(
+                pred_scores=scores_pred,
+                target_scores=scores_gt, target_presence=presence_gt,
+                weights=weights, mask=mask,
+            )
+            self.metrics[f"overall_accuracy_{100 * tol:.0f}cents{postfix}"].update(
+                pred_scores=scores_pred, pred_presence=presence_pred,
+                target_scores=scores_gt, target_presence=presence_gt,
+                weights=weights, mask=mask,
+            )
 
     def plot_validation_results(self, sample: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor]) -> None:
         for i in range(len(sample["indices"])):

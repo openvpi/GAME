@@ -47,13 +47,18 @@ class SegmentationLightningModule(BaseLightningModule):
             decay_alpha=self.training_config.loss.boundary_loss.decay_alpha,
             decay_power=self.training_config.loss.boundary_loss.decay_power,
         ))
-        self.register_metric("average_chamfer_distance", AverageChamferDistance())
-        self.register_metric("quantity_metric_collection", QuantityMetricCollection(
-            tolerance=self.training_config.validation.boundary_matching_tolerance
+        self._register_metrics()
+        if self.use_parallel_dirty_metrics:
+            self._register_metrics(postfix="_dirty")
+
+    def _register_metrics(self, postfix: str = "") -> None:
+        self.register_metric(f"average_chamfer_distance{postfix}", AverageChamferDistance())
+        self.register_metric(f"quantity_metric_collection{postfix}", QuantityMetricCollection(
+            tolerance=self.training_config.validation.boundary_matching_tolerance,
+            postfix=postfix,
         ))
 
     def forward_model(self, sample: dict[str, torch.Tensor], infer: bool) -> dict[str, torch.Tensor]:
-        B = sample["size"]
         spectrogram = sample["spectrogram"]
         if self.model_config.use_languages:
             language_ids = sample["language_id"]
@@ -70,50 +75,24 @@ class SegmentationLightningModule(BaseLightningModule):
         mask = regions != 0
 
         if infer:
-            if self.model_config.mode == "d3pm":
-                # 1. Initialize with a whole region.
-                # 2. Merge regions by p(t) before each step.
-                # 3. Predict full regions.
-                latent = None
-                velocities = None
-                boundaries_pred = None
-                num_steps = self.training_config.validation.d3pm_sample_steps
-                timestep = torch.full(
-                    (B,), fill_value=1 / num_steps,
-                    dtype=torch.float32, device=regions.device
-                )
-                regions_pred = mask.long()
-                for i in range(num_steps):
-                    t = i * timestep
-                    noise = d3pm_region_noise(regions_pred, t=t)  # [B, T]
-                    velocities, latent = self.model(
-                        spectrogram, regions=noise, t=t,
-                        language=language_ids, mask=mask,
-                    )  # [B, T]
-                    boundaries_pred = decode_boundaries_from_velocities(
-                        velocities, mask=mask,
-                        threshold=self.training_config.validation.boundary_decoding_threshold,
-                        radius=self.training_config.validation.boundary_decoding_radius,
-                    )
-                    regions_pred = (boundaries_pred.long().cumsum(dim=-1) + 1) * mask.long()
-            elif self.model_config.mode == "completion":
-                # One-step prediction from a whole region.
-                velocities, latent = self.model(
-                    spectrogram, regions=mask.long(),
-                    language=language_ids, mask=mask,
-                )  # [B, T]
-                boundaries_pred = decode_boundaries_from_velocities(
-                    velocities, mask=mask,
-                    threshold=self.training_config.validation.boundary_decoding_threshold,
-                    radius=self.training_config.validation.boundary_decoding_radius,
-                )
-            else:
-                raise ValueError(f"Unknown mode: {self.model_config.mode}.")
-
+            velocities, boundaries_pred, latent = self._forward_infer(
+                spectrogram, language_ids=language_ids, mask=mask
+            )
             similarities = self_cosine_similarity(latent)  # [B, T, T]
+            self._update_metrics(
+                boundaries_pred=boundaries_pred,
+                boundaries_gt=boundaries
+            )
 
-            self.metrics["average_chamfer_distance"].update(boundaries_pred, boundaries)
-            self.metrics["quantity_metric_collection"].update(boundaries_pred, boundaries)
+            if self.use_parallel_dirty_metrics:
+                _, boundaries_pred_dirty, _ = self._forward_infer(
+                    sample["spectrogram_dirty"], language_ids=language_ids, mask=mask
+                )
+                self._update_metrics(
+                    boundaries_pred=boundaries_pred_dirty,
+                    boundaries_gt=boundaries,
+                    postfix="_dirty"
+                )
 
             return {
                 "similarities": similarities,
@@ -121,23 +100,9 @@ class SegmentationLightningModule(BaseLightningModule):
                 "boundaries": boundaries_pred,
             }
         else:
-            if self.model_config.mode == "d3pm":
-                # Choose random t, merge regions by p(t)
-                t = torch.rand(B, device=spectrogram.device)
-                noise = d3pm_region_noise(regions, t=t)  # [B, T]
-            elif self.model_config.mode == "completion":
-                # Choose random p, merge regions by p
-                t = None
-                p = torch.randn(B, device=spectrogram.device)
-                noise = merge_random_regions(regions, p=p)
-            else:
-                raise ValueError(f"Unknown mode: {self.model_config.mode}.")
-
-            velocities, latent = self.model(
-                spectrogram, regions=noise, t=t,
-                language=language_ids, mask=mask,
-            )  # [B, T]
-
+            velocities, latent = self._forward_train(
+                spectrogram, language_ids=language_ids, regions=regions, mask=mask
+            )
             region_loss = self.losses["region_loss"](latent, regions)
             boundary_loss = self.losses["boundary_loss"](velocities, boundaries, mask=mask)
 
@@ -145,6 +110,75 @@ class SegmentationLightningModule(BaseLightningModule):
                 "region_loss": region_loss,
                 "boundary_loss": boundary_loss,
             }
+
+    def _forward_train(self, spectrogram, language_ids, regions, mask):
+        B = spectrogram.shape[0]
+        if self.model_config.mode == "d3pm":
+            # Choose random t, merge regions by p(t)
+            t = torch.rand(B, device=spectrogram.device)
+            noise = d3pm_region_noise(regions, t=t)  # [B, T]
+        elif self.model_config.mode == "completion":
+            # Choose random p, merge regions by p
+            t = None
+            p = torch.randn(B, device=spectrogram.device)
+            noise = merge_random_regions(regions, p=p)
+        else:
+            raise ValueError(f"Unknown mode: {self.model_config.mode}.")
+
+        velocities, latent = self.model(
+            spectrogram, regions=noise, t=t,
+            language=language_ids, mask=mask,
+        )  # [B, T]
+
+        return velocities, latent
+
+    def _forward_infer(self, spectrogram, language_ids, mask):
+        B = spectrogram.shape[0]
+        if self.model_config.mode == "d3pm":
+            # 1. Initialize with a whole region.
+            # 2. Merge regions by p(t) before each step.
+            # 3. Predict full regions.
+            latent = None
+            velocities = None
+            boundaries_pred = None
+            num_steps = self.training_config.validation.d3pm_sample_steps
+            timestep = torch.full(
+                (B,), fill_value=1 / num_steps,
+                dtype=torch.float32, device=spectrogram.device
+            )
+            regions_pred = mask.long()
+            for i in range(num_steps):
+                t = i * timestep
+                noise = d3pm_region_noise(regions_pred, t=t)  # [B, T]
+                velocities, latent = self.model(
+                    spectrogram, regions=noise, t=t,
+                    language=language_ids, mask=mask,
+                )  # [B, T]
+                boundaries_pred = decode_boundaries_from_velocities(
+                    velocities, mask=mask,
+                    threshold=self.training_config.validation.boundary_decoding_threshold,
+                    radius=self.training_config.validation.boundary_decoding_radius,
+                )
+                regions_pred = (boundaries_pred.long().cumsum(dim=-1) + 1) * mask.long()
+        elif self.model_config.mode == "completion":
+            # One-step prediction from a whole region.
+            velocities, latent = self.model(
+                spectrogram, regions=mask.long(),
+                language=language_ids, mask=mask,
+            )  # [B, T]
+            boundaries_pred = decode_boundaries_from_velocities(
+                velocities, mask=mask,
+                threshold=self.training_config.validation.boundary_decoding_threshold,
+                radius=self.training_config.validation.boundary_decoding_radius,
+            )
+        else:
+            raise ValueError(f"Unknown mode: {self.model_config.mode}.")
+
+        return velocities, boundaries_pred, latent
+
+    def _update_metrics(self, boundaries_pred: torch.Tensor, boundaries_gt: torch.Tensor, postfix: str = ""):
+        self.metrics[f"average_chamfer_distance{postfix}"].update(boundaries_pred, boundaries_gt)
+        self.metrics[f"quantity_metric_collection{postfix}"].update(boundaries_pred, boundaries_gt)
 
     def plot_validation_results(self, sample: dict[str, torch.Tensor], outputs: dict[str, torch.Tensor]) -> None:
         for i in range(len(sample["indices"])):

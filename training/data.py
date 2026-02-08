@@ -57,29 +57,32 @@ class BaseDataset(torch.utils.data.Dataset):
         self.augmentation_skip_transforms = augmentation_skip_transforms
         self.augmentation_return_dirty = augmentation_return_dirty
         self.augmentation_args_map: dict[int, AugmentationArgs] = {}
+        self.setup = False
 
-        if augmentation_config is not None:
-            self.mel_spectrogram = StretchableMelSpectrogram(
-                sample_rate=augmentation_config.features.audio_sample_rate,
-                n_mels=augmentation_config.features.spectrogram.num_bins,
-                n_fft=augmentation_config.features.fft_size,
-                win_length=augmentation_config.features.win_size,
-                hop_length=augmentation_config.features.hop_size,
-                fmin=augmentation_config.features.spectrogram.fmin,
-                fmax=augmentation_config.features.spectrogram.fmax,
-                clip_val=1e-9,
-            ).eval()
-            if augmentation_deterministic:
-                # Pre-generate augmentation args for each sample
-                seed = generate_seed(sorted(self.info.keys()))
-                generator = numpy.random.default_rng(seed)
-                for index in range(len(self.data)):
-                    self.augmentation_args_map[index] = generate_augmentation_args(
-                        augmentation_config, generator=generator,
-                        skip_transforms=augmentation_skip_transforms,
-                    )
+    def _setup(self):
+        if self.augmentation_config is None:
+            return
+        self.mel_spectrogram = StretchableMelSpectrogram(
+            sample_rate=self.augmentation_config.features.audio_sample_rate,
+            n_mels=self.augmentation_config.features.spectrogram.num_bins,
+            n_fft=self.augmentation_config.features.fft_size,
+            win_length=self.augmentation_config.features.win_size,
+            hop_length=self.augmentation_config.features.hop_size,
+            fmin=self.augmentation_config.features.spectrogram.fmin,
+            fmax=self.augmentation_config.features.spectrogram.fmax,
+            clip_val=1e-9,
+        ).eval()
+        if self.augmentation_deterministic:
+            # Pre-generate augmentation args for each sample
+            seed = generate_seed(sorted(self.info.keys()))
+            generator = numpy.random.default_rng(seed)
+            for index in range(len(self)):
+                self.augmentation_args_map[index] = generate_augmentation_args(
+                    self.augmentation_config, generator=generator,
+                    skip_transforms=self.augmentation_skip_transforms,
+                )
 
-    def get_waveform(self, index):
+    def _get_waveform(self, index):
         # Load original waveform
         waveform_fn = self.data_dir / self.info["item_paths"][index]
         waveform, _ = librosa.load(
@@ -87,12 +90,12 @@ class BaseDataset(torch.utils.data.Dataset):
         )
         return waveform
 
-    def get_augmented_spectrogram(self, index, spectrogram: torch.Tensor, args: AugmentationArgs) -> torch.Tensor:
+    def _get_augmented_spectrogram(self, index, spectrogram: torch.Tensor, args: AugmentationArgs) -> torch.Tensor:
         waveform = None
         # RIR reverb (wav -> wav)
         if args.rir_kernel_path is not None:
             if waveform is None:
-                waveform = self.get_waveform(index)
+                waveform = self._get_waveform(index)
             waveform = rir_reverb(
                 waveform,
                 sr=self.augmentation_config.features.audio_sample_rate,
@@ -101,7 +104,7 @@ class BaseDataset(torch.utils.data.Dataset):
         # Colored noise (wav -> wav)
         if args.colored_noise_exponent is not None:
             if waveform is None:
-                waveform = self.get_waveform(index)
+                waveform = self._get_waveform(index)
             waveform = colored_noise(
                 waveform,
                 exponent=args.colored_noise_exponent,
@@ -111,7 +114,7 @@ class BaseDataset(torch.utils.data.Dataset):
         # Natural noise (wav -> wav)
         if args.natural_noise_path is not None:
             if waveform is None:
-                waveform = self.get_waveform(index)
+                waveform = self._get_waveform(index)
             waveform = natural_noise(
                 waveform,
                 sr=self.augmentation_config.features.audio_sample_rate,
@@ -123,7 +126,7 @@ class BaseDataset(torch.utils.data.Dataset):
         # Pitch shifting (wav -> mel)
         if args.pitch_shift is not None:
             if waveform is None:
-                waveform = self.get_waveform(index)
+                waveform = self._get_waveform(index)
             spectrogram = pitch_shifting(
                 waveform,
                 self.mel_spectrogram,
@@ -156,6 +159,9 @@ class BaseDataset(torch.utils.data.Dataset):
         return spectrogram
 
     def __getitem__(self, index):
+        if not self.setup:
+            self._setup()
+            self.setup = True
         sample = self.data[index]
         spectrogram = sample["spectrogram"]
         augmentation = {}
@@ -168,7 +174,7 @@ class BaseDataset(torch.utils.data.Dataset):
                     skip_transforms=self.augmentation_skip_transforms,
                 )
             # Apply augmentations to spectrogram
-            spectrogram = self.get_augmented_spectrogram(index, spectrogram, augmentation_args)
+            spectrogram = self._get_augmented_spectrogram(index, spectrogram, augmentation_args)
             # Convert augmentation args to dict for pickling
             augmentation = dataclasses.asdict(augmentation_args)
         spectrogram = torch.clamp(spectrogram, min=math.log(1e-5))

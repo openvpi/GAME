@@ -22,8 +22,9 @@ class NotePresenceMetricCollection(torchmetrics.Metric):
         - presence_f1_score: Scalar tensor representing the F1 score.
     """
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, postfix: str = "", **kwargs) -> None:
         super().__init__(**kwargs)
+        self.postfix = postfix
         self.add_state("tp", default=torch.tensor(0.0, dtype=torch.float32), dist_reduce_fx="sum")
         self.add_state("tn", default=torch.tensor(0.0, dtype=torch.float32), dist_reduce_fx="sum")
         self.add_state("fp", default=torch.tensor(0.0, dtype=torch.float32), dist_reduce_fx="sum")
@@ -48,10 +49,10 @@ class NotePresenceMetricCollection(torchmetrics.Metric):
         tnr = self.tn / (self.tn + self.fp + 1e-6)
         f1_score = 2 * precision * recall / (precision + recall + 1e-6)
         return {
-            "presence_precision": precision,
-            "presence_recall": recall,
-            "presence_tnr": tnr,
-            "presence_f1_score": f1_score,
+            f"presence_precision{self.postfix}": precision,
+            f"presence_recall{self.postfix}": recall,
+            f"presence_tnr{self.postfix}": tnr,
+            f"presence_f1_score{self.postfix}": f1_score,
         }
 
 

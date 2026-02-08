@@ -43,7 +43,7 @@ training:
     rir_reverb:
       enabled: false
       prob: 0.25
-      rir_path_glob: "data/reverb/**/*.wav"
+      kernel_path_glob: "data/reverb/**/*.wav"
 
   dataloader:
     max_batch_frames: 20000
@@ -101,6 +101,7 @@ training:
     gradient_clip_val: 1.0
   validation:
     max_plots: 10
+    parallel_dirty_metrics: true
   finetuning:
     pretraining_enabled: false
     pretraining_from: null

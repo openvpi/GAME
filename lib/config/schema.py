@@ -207,6 +207,15 @@ class AugmentationConfig(ConfigBaseModel):
     natural_noise: NaturalNoiseAugmentationConfig = Field(...)
     rir_reverb: RIRReverbAugmentationConfig = Field(...)
 
+    @property
+    def has_destructive_augmentations(self) -> bool:
+        return (
+            self.spectrogram_masking.enabled
+            or self.colored_noise.enabled
+            or self.natural_noise.enabled
+            or self.rir_reverb.enabled
+        )
+
 
 class RegionLossConfig(ConfigBaseModel):
     neighborhood_size: int = Field(5, ge=1)
@@ -351,6 +360,7 @@ class TrainerConfig(ConfigBaseModel):
 
 class ValidationConfig(ConfigBaseModel):
     max_plots: int = Field(100, ge=0)
+    parallel_dirty_metrics: bool = Field(True)
     boundary_drop_probability: float = Field(0.8, gt=0, le=1, json_schema_extra={
         "scope": ConfigurationScope.SEGMENTATION
     })

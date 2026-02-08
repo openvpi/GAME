@@ -19,9 +19,10 @@ class QuantityMetricCollection(torchmetrics.Metric):
         - quantity_recall: Scalar tensor representing the recall, i.e. TP / (TP + FN).
     """
 
-    def __init__(self, *, tolerance: int = 5, **kwargs):
+    def __init__(self, *, tolerance: int = 5, postfix: str = "", **kwargs):
         super().__init__(**kwargs)
         self.tolerance = tolerance
+        self.postfix = postfix
         self.add_state("tp", default=torch.tensor(0, dtype=torch.int64), dist_reduce_fx="sum")
         self.add_state("fp", default=torch.tensor(0, dtype=torch.int64), dist_reduce_fx="sum")
         self.add_state("fn", default=torch.tensor(0, dtype=torch.int64), dist_reduce_fx="sum")
@@ -41,9 +42,9 @@ class QuantityMetricCollection(torchmetrics.Metric):
 
     def compute(self) -> dict[str, Tensor]:
         return {
-            "quantity_error_rate": (self.fn + self.fp).float() / (self.total + self.N).float(),
-            "quantity_precision": (self.tp + self.N).float() / (self.tp + self.fp + self.N).float(),
-            "quantity_recall": (self.tp + self.N).float() / (self.tp + self.fn + self.N).float(),
+            f"quantity_error_rate{self.postfix}": (self.fn + self.fp).float() / (self.total + self.N).float(),
+            f"quantity_precision{self.postfix}": (self.tp + self.N).float() / (self.tp + self.fp + self.N).float(),
+            f"quantity_recall{self.postfix}": (self.tp + self.N).float() / (self.tp + self.fn + self.N).float(),
         }
 
 
