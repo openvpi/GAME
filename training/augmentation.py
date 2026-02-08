@@ -167,7 +167,7 @@ def natural_noise(
         noise = np.pad(noise, (0, len(waveform) - len(noise)), mode="constant")
     elif len(noise) > len(waveform):
         noise = noise[:len(waveform)]
-    scale = waveform.max() / (noise.max() + 1e-8)
+    scale = np.abs(waveform).max() / (np.abs(noise).max() + 1e-8)
     waveform_noisy = waveform + noise * scale * (10 ** (db / 20))
     return waveform_noisy.astype(np.float32)
 
@@ -183,9 +183,9 @@ def rir_reverb(
     rir, _ = librosa.load(kernel_path, sr=sr, mono=True)
     convolved = scipy.signal.fftconvolve(waveform, rir, mode="full").astype(np.float32)
     rir_max = np.abs(rir).argmax()
-    convolved = convolved[rir_max:rir_max + len(waveform)]
-    factor = waveform.max() / (convolved.max() + 1e-8)
-    convolved = convolved * factor
+    convolved = convolved[rir_max: rir_max + len(waveform)]
+    scale = np.abs(waveform).max() / (np.abs(convolved).max() + 1e-8)
+    convolved = convolved * scale
     return convolved.astype(np.float32)
 
 
