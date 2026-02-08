@@ -135,7 +135,7 @@ def shared_options(func):
             help="Starting T value (t0) for segmentation model."
         ),
         click.option(
-            "--nsteps", "--seg-d3pm-nsteps", type=click.IntRange(min=1), default=1, show_default=True,
+            "--nsteps", "--seg-d3pm-nsteps", type=click.IntRange(min=1), default=4, show_default=True,
             help="Number of D3PM sampling steps for segmentation model."
         ),
         click.option(
