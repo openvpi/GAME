@@ -5,32 +5,15 @@ import torch.nn.functional as F
 from torch import Tensor
 
 
-def find_local_minima(x: Tensor, threshold: float, radius: int = 2):
+def find_local_extremum(x: Tensor, threshold: float = None, radius: int = 2, maxima=True):
     """
-    Find local minima in the last dimension of x within a given radius and below a threshold.
+    Find local extremum in the last dimension of x within a given radius and below/above a threshold.
     :param x: [..., T]
-    :param threshold: ignore values above this threshold
-    :param radius: int, radius for local minima search
-    :return: [..., T], 1 = minima, 0 = non-minima
-    """
-    assert radius >= 1
-    x_pad = F.pad(
-        x, (radius, radius),
-        mode="constant", value=float("-inf")
-    )  # [..., T + 2r]
-    windows = x_pad.unfold(dimension=-1, size=2 * radius + 1, step=1)  # [..., T, 2r+1]
-    minima = (windows.argmin(dim=-1) == radius) & (x <= threshold)  # [..., T]
-    return minima
-
-
-def find_local_extremum(x: Tensor, threshold: float, radius: int = 2, maxima=True):
-    """
-    Find local minima in the last dimension of x within a given radius and below/above a threshold.
-    :param x: [..., T]
-    :param threshold: ignore values above this threshold
-    :param radius: int, radius for local minima search
+    :param threshold: ignore maxima below this threshold or minima above this threshold.
+    :param radius: int, radius for local extremum search. x[i] is considered a local extremum
+     only if it is the maximum/minimum within the window [i-radius, i+radius].
     :param maxima: bool, if True, find local maxima; otherwise, find local minima
-    :return: [..., T], 1 = minima, 0 = non-minima
+    :return: [..., T], 1 = extremum, 0 = non-extremum
     """
     assert radius >= 1
     infinite = float("+inf") if maxima else float("-inf")
@@ -40,10 +23,14 @@ def find_local_extremum(x: Tensor, threshold: float, radius: int = 2, maxima=Tru
     )  # [..., T + 2r]
     windows = x_pad.unfold(dimension=-1, size=2 * radius + 1, step=1)  # [..., T, 2r+1]
     if maxima:
-        maxima = (windows.argmax(dim=-1) == radius) & (x >= threshold)  # [..., T]
+        maxima = (windows.argmax(dim=-1) == radius)  # [..., T]
+        if threshold is not None:
+            maxima &= (x >= threshold)
         return maxima
     else:
-        minima = (windows.argmin(dim=-1) == radius) & (x <= threshold)  # [..., T]
+        minima = (windows.argmin(dim=-1) == radius)  # [..., T]
+        if threshold is not None:
+            minima &= (x <= threshold)
         return minima
 
 
@@ -51,6 +38,15 @@ def decode_soft_boundaries(
         boundaries: Tensor, barriers: Tensor = None, mask: Tensor = None,
         threshold: float = 0.5, radius: int = 2
 ):
+    """
+    Decode gaussian-softened boundaries.
+    :param boundaries: boundary probabilities within [0, 1]
+    :param barriers: [..., T], optional preset boundaries
+    :param mask: [..., T], optional mask
+    :param threshold: float(0~1), only consider probabilities above this value
+    :param radius: int, radius for local maxima search
+    :return:
+    """
     if mask is not None:
         boundaries = torch.where(mask, boundaries, float("+inf"))
     if barriers is not None:
@@ -71,7 +67,7 @@ def decode_boundaries_from_velocities(
         2. Apply min-max normalization to distances.
         3. Find local minima in distances that are below the threshold.
     :param velocities: [..., T]
-    :param barriers: [..., T],optional preset boundaries or local minima points
+    :param barriers: [..., T], optional preset boundaries or local minima points
     :param mask: [..., T], optional mask to apply before decoding
     :param threshold: float (0~1), velocity threshold (after normalization) to consider a boundary
     :param radius: int, radius for local minima search
@@ -91,7 +87,7 @@ def decode_boundaries_from_velocities(
         distances = torch.where(mask, distances, float("-inf"))
     if barriers is not None:
         distances = torch.masked_fill(distances, barriers, float("-inf"))
-    boundaries = find_local_minima(distances, threshold=threshold, radius=radius)  # [..., T]
+    boundaries = find_local_extremum(distances, threshold=threshold, radius=radius, maxima=False)  # [..., T]
     if mask is not None:
         boundaries &= mask
     return boundaries
@@ -128,7 +124,7 @@ def decode_boundaries_from_velocities_with_confidences(
         distances = torch.where(mask, distances, float("-inf"))
     if barriers is not None:
         distances = torch.masked_fill(distances, barriers, float("-inf"))
-    boundaries = find_local_minima(distances, threshold=threshold, radius=radius)  # [..., T]
+    boundaries = find_local_extremum(distances, threshold=threshold, radius=radius, maxima=False)  # [..., T]
     if mask is not None:
         boundaries &= mask
     confidences=confidences*boundaries
