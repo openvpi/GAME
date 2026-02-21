@@ -2,7 +2,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.onnx.operators
+from einops import rearrange
 from torch import nn
+
+from modules.commons.local_down_layer import LocalAttentionPoolDown, AttentionPoolDown, CrossAttentionDown, \
+    LocalCrossAttentionDown, LearnablePoolTokens
 
 
 class CyclicRegionEmbedding(nn.Module):
@@ -43,73 +47,173 @@ class LocalDownsample(nn.Module):
         x_down = weight @ x  # [..., N, T] @ [..., T, C] -> [..., N, C]
         return x_down  # [..., N, C]
 
+class AttentionDownsample(nn.Module):
+    """
+    Unified attention downsample module.
+    Interface similar to LocalDownsample, internally dispatches to
+    LocalAttentionPoolDown / AttentionPoolDown / CrossAttentionDown / LocalCrossAttentionDown.
 
-class MultiheadSelfAttentionWithRoPE(nn.Module):
-    def __init__(self, embed_dim, num_heads, dropout=0.1, bias=False, rotary_embed=None):
+    Pool/query token source:
+    - 'local_avg': LocalDownsample (mean pooling per region)
+    - 'learnable': LearnablePoolTokens (learnable embeddings)
+    """
+
+    def __init__(
+            self,
+            dim: int,
+            num_heads: int,
+            head_dim: int,
+            mode: str = 'local_attn_pool',  # 'local_attn_pool', 'attn_pool', 'cross_attn', 'local_cross_attn'
+            token_source: str = 'local_avg',  # 'local_avg', 'learnable'
+            region_token_num: int = 1,
+            use_rope: bool = True,
+            use_region_rope: bool = True,
+            use_region_bias: bool = False,
+            use_pool_offset: bool = False,
+            dropout_attn: float = 0.0,
+            out_drop: float = 0.0,
+            theta: float = 10000.0,
+    ):
         super().__init__()
-        assert embed_dim % num_heads == 0, "Embedding dimension must be divisible by number of heads"
-
-        self.embed_dim = embed_dim
+        self.mode = mode
+        self.token_source = token_source
+        self.region_token_num = region_token_num
         self.num_heads = num_heads
-        self.head_dim = embed_dim // num_heads
+        self.head_dim = head_dim
+        attn_dim = num_heads * head_dim
 
-        # Linear layers for Q, K, V projections
-        self.in_proj = nn.Linear(embed_dim, embed_dim * 3, bias=bias)
+        # Token source
+        if token_source == 'local_avg':
+            self.token_gen = LocalDownsample()
+        elif token_source == 'learnable':
+            self.token_gen = LearnablePoolTokens(dim, region_token_num)
+        else:
+            raise ValueError(f"Unknown token_source: {token_source}")
 
-        # Final linear layer after concatenation
-        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        # Projections
+        is_sa = mode in ('local_attn_pool', 'attn_pool')
+        is_ca = mode in ('cross_attn', 'local_cross_attn')
 
-        # Dropout layer
-        self.dropout = nn.Dropout(dropout)
+        # Pool/query projections
+        self.pool_proj_q = nn.Linear(dim, attn_dim, bias=True)
+        if is_sa:
+            self.pool_proj_k = nn.Linear(dim, attn_dim, bias=True)
+            self.pool_proj_v = nn.Linear(dim, attn_dim, bias=True)
 
-        # Rotary Embeddings
-        self.rotary_embed = rotary_embed
+        # X projections
+        if is_sa:
+            self.x_proj_q = nn.Linear(dim, attn_dim, bias=True)
+        self.x_proj_k = nn.Linear(dim, attn_dim, bias=True)
+        self.x_proj_v = nn.Linear(dim, attn_dim, bias=True)
 
-        # Initialization parameters
-        nn.init.xavier_uniform_(self.in_proj.weight)
-        nn.init.xavier_uniform_(self.out_proj.weight)
-        if bias:
-            nn.init.constant_(self.in_proj.bias, 0.0)
-            nn.init.constant_(self.out_proj.bias, 0.0)
+        # Output projection
+        self.out_linear = nn.Linear(attn_dim, dim, bias=True)
+        self.out_drop = nn.Dropout(out_drop) if out_drop > 0. else nn.Identity()
 
-    def forward(self, x, key_padding_mask=None):
-        # x: (B, L, C)
-        # key_padding_mask: (B, L)
-        batch_size, seq_len, embed_dim = x.size()
+        # Core attention module
+        if mode == 'local_attn_pool':
+            self.attn = LocalAttentionPoolDown(
+                head_dim=head_dim, region_token_num=region_token_num,
+                use_rope=use_rope, use_pool_offset=use_pool_offset,
+                dropout_attn=dropout_attn, theta=theta,
+            )
+        elif mode == 'attn_pool':
+            self.attn = AttentionPoolDown(
+                head_dim=head_dim, num_heads=num_heads,
+                region_token_num=region_token_num,
+                use_rope=use_rope, use_region_rope=use_region_rope,
+                use_region_bias=use_region_bias, use_pool_offset=use_pool_offset,
+                dropout_attn=dropout_attn, theta=theta,
+            )
+        elif mode == 'cross_attn':
+            self.attn = CrossAttentionDown(
+                head_dim=head_dim, num_heads=num_heads,
+                region_token_num=region_token_num,
+                use_rope=use_rope, use_region_rope=use_region_rope,
+                use_region_bias=use_region_bias, use_pool_offset=use_pool_offset,
+                dropout_attn=dropout_attn, theta=theta,
+            )
+        elif mode == 'local_cross_attn':
+            self.attn = LocalCrossAttentionDown(
+                head_dim=head_dim, region_token_num=region_token_num,
+                use_rope=use_rope, use_pool_offset=use_pool_offset,
+                dropout_attn=dropout_attn, theta=theta,
+            )
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
 
-        # Project inputs to Q, K, V
-        Q, K, V = torch.split(self.in_proj(x), self.embed_dim, dim=-1)
+    def _generate_tokens(self, x, regions, max_n, n_mask):
+        """Generate pool/query tokens based on token_source."""
+        if self.token_source == 'local_avg':
+            # [B, N, C], one token per region
+            tokens = self.token_gen(x, regions, max_n)  # [B, N, C]
+            if self.region_token_num > 1:
+                # Repeat for region_token_num
+                tokens = tokens.unsqueeze(2).expand(-1, -1, self.region_token_num, -1)
+                tokens = tokens.reshape(tokens.shape[0], -1, tokens.shape[-1])  # [B, N*R, C]
+            # Apply n_mask
+            mask = n_mask.unsqueeze(-1)  # [B, N, 1]
+            if self.region_token_num > 1:
+                mask = mask.unsqueeze(-1).expand(-1, -1, self.region_token_num, -1)
+                mask = mask.reshape(mask.shape[0], -1, 1)  # [B, N*R, 1]
+            tokens = tokens * mask.float()
+            return tokens
+        else:
+            return self.token_gen(max_n, n_mask)  # [B, N*R, C]
 
-        # Reshape Q, K, V for multi-head attention
-        Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, L, D)
-        K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, L, D)
-        V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)  # (B, H, L, D)
+    def _to_heads(self, x):
+        return rearrange(x, 'b t (h d) -> b h t d', h=self.num_heads)
 
-        # Apply RoPE
-        if self.rotary_embed is not None:
-            Q = self.rotary_embed.rotate_queries_or_keys(Q)
-            K = self.rotary_embed.rotate_queries_or_keys(K)
+    def forward(self, x, regions, t_mask, n_mask, max_n=None):
+        """
+        :param x: [B, T, C] input tensor
+        :param regions: [B, T] int64, 0=pad, 1..N
+        :param t_mask: [B, T] bool, True=valid
+        :param n_mask: [B, N] bool, True=valid
+        :param max_n: int, optional. N = max(regions) if not given.
+        :return: [B, N*R, C] downsampled output (or [B, N, C] if region_token_num=1)
+        """
+        if max_n is None:
+            max_n = regions.max().item()
 
-        # Compute attention scores
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / np.sqrt(self.head_dim)  # (B, H, L, L)
+        # Generate pool/query tokens
+        pool = self._generate_tokens(x, regions, max_n, n_mask)  # [B, P, C]
 
-        # Apply key padding mask if provided
-        if key_padding_mask is not None:
-            # Expand mask to match attention scores shape
-            mask = key_padding_mask.unsqueeze(1).unsqueeze(1)  # (B, 1, 1, L)
-            scores = scores.masked_fill(mask == 1, -np.inf)  # Masked positions are set to -inf
+        is_sa = self.mode in ('local_attn_pool', 'attn_pool')
+        is_ca = self.mode in ('cross_attn', 'local_cross_attn')
 
-        # Compute attention weights
-        attn_weights = F.softmax(scores, dim=-1)  # (B, H, L, L)
-        attn_weights = self.dropout(attn_weights)
+        # Project
+        pool_q = self._to_heads(self.pool_proj_q(pool))
 
-        # Apply attention weights to V
-        attn_output = torch.matmul(attn_weights, V)  # (B, H, L, D)
+        x_k = self._to_heads(self.x_proj_k(x))
+        x_v = self._to_heads(self.x_proj_v(x))
 
-        # Reshape and concatenate heads
-        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, embed_dim)  # (B, L, C)
+        if is_sa:
+            pool_k = self._to_heads(self.pool_proj_k(pool))
+            pool_v = self._to_heads(self.pool_proj_v(pool))
+            x_q = self._to_heads(self.x_proj_q(x))
 
-        # Final linear projection
-        output = self.out_proj(attn_output)  # (B, L, C)
+            out = self.attn(
+                pool_q, pool_k, pool_v,
+                x_q, x_k, x_v,
+                regions, t_mask, n_mask, max_n,
+            )
+        else:
+            out = self.attn(
+                pool_q,
+                x_k, x_v,
+                regions, t_mask, n_mask, max_n,
+            )
 
-        return output
+        # [B, H, P, D] -> [B, P, C]
+        out = rearrange(out, 'b h t d -> b t (h d)')
+        out = self.out_linear(out)
+        out = self.out_drop(out)
+
+        # Apply n_mask to output
+        P = max_n * self.region_token_num
+        out_mask = n_mask.unsqueeze(-1).expand(-1, -1, self.region_token_num)
+        out_mask = out_mask.reshape(out.shape[0], P, 1).float()
+        out = out * out_mask
+
+        return out
