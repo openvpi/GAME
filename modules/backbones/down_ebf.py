@@ -644,6 +644,7 @@ class JEBFBackbone(nn.Module): #todo 其他的到时候再说
             ffn_out_drop: float = 0.1,
             
             use_out_norm: bool = True,
+            skip_fist_ffn=False,
             pool_out_dim: int = None,
     ):
         super().__init__()
@@ -677,7 +678,7 @@ class JEBFBackbone(nn.Module): #todo 其他的到时候再说
                 attn_out_drop_pool=attn_out_drop_pool,
                 use_ls=use_ls, ffn_type=ffn_type,
                 ffn_latent_drop=ffn_latent_drop, ffn_out_drop=ffn_out_drop,
-                skip_fist_ffn=(i == 0),  # skip first FFN for first layer
+                skip_fist_ffn=skip_fist_ffn,  # skip first FFN for first layer #todo
             )
             for i in range(num_layers)
         ])
