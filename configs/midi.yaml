@@ -48,43 +48,23 @@ model:
       out_drop: 0.1
       c_out_drop: 0.1
       c_latent_drop: 0.0
-  adaptor:
-    cls: "modules.backbones.EBF.EBFBackbone"
-    kwargs:
-      dim: 256
-      num_layers: 4
-      latent_layer_idx: 2
-      latent_out_dim: 16
-      use_out_norm: false
-      num_heads: 8
-      head_dim: 32
-      c_kernel_size: 31
-      m_kernel_size: 31
-      ffn_type: 'glu' # 'glu', 'ffn', 'cgmlp'
-      ffn_latent_drop: 0.0
-      ffn_out_drop: 0.1
-      use_ls: true
-      dropout_attn: 0.0
-      out_drop: 0.1
-      c_out_drop: 0.1
-      c_latent_drop: 0.0
   estimator:
-    cls: "modules.backbones.EBF.EBFBackbone"
+    cls: "modules.backbones.down_ebf.JEBFBackbone"
     kwargs:
       dim: 256
       num_layers: 4
       num_heads: 8
-      head_dim: 32
-      c_kernel_size: 7
-      m_kernel_size: 3
+      head_dim: 64
+      pool_token_source: 'learnable'
+      rope_mode: 'mixed'  # 'local', 'global', 'mixed'
+      c_kernel_size_pool: 7
+      m_kernel_size_pool: 5
+      c_kernel_size_x: 31
+      m_kernel_size_x: 31
+      qk_norm: true
       ffn_type: 'glu' # 'glu', 'ffn', 'cgmlp'
-      ffn_latent_drop: 0.0
+      ffn_latent_drop: 0.1
       ffn_out_drop: 0.1
-      use_ls: true
-      dropout_attn: 0.0
-      out_drop: 0.1
-      c_out_drop: 0.1
-      c_latent_drop: 0.0
 
 training:
   loss:

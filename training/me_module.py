@@ -51,16 +51,12 @@ class MIDIExtractionModule(BaseLightningModule):
         return SegmentationEstimationModel(self.model_config)
 
     def register_losses_and_metrics(self) -> None:
-        self.register_loss("region_predict_loss", RegionalCosineSimilarityLoss(
+        self.register_loss("region_loss", RegionalCosineSimilarityLoss(
             neighborhood_size=self.training_config.loss.region_loss.neighborhood_size,
             exponential_decay=self.training_config.loss.region_loss.exponential_decay,
         ))
         self.register_loss("boundary_loss", GaussianSoftBoundaryLoss(
             std=self.training_config.loss.boundary_loss.std,
-        ))
-        self.register_loss("region_adapt_loss", RegionalCosineSimilarityLoss(
-            neighborhood_size=self.training_config.loss.region_loss.neighborhood_size,
-            exponential_decay=self.training_config.loss.region_loss.exponential_decay,
         ))
         self.register_loss("note_loss", GaussianBlurredBinsLoss(
             min_val=self.training_config.loss.note_loss.midi_min,
@@ -155,17 +151,15 @@ class MIDIExtractionModule(BaseLightningModule):
             boundary_logits, seg_latent = self._forward_train_segmentation(
                 x_seg, language_ids=language_ids, boundaries=boundaries, mask=t_mask
             )
-            note_logits, est_latent = self._forward_estimation(
+            note_logits = self._forward_estimation(
                 x_est, regions=regions, max_n=max_n, t_mask=t_mask, n_mask=n_mask
             )
-            region_predict_loss = self.losses["region_predict_loss"](seg_latent, regions)
+            region_loss = self.losses["region_loss"](seg_latent, regions)
             boundary_loss = self.losses["boundary_loss"](boundary_logits, boundaries, mask=t_mask)
-            region_adapt_loss = self.losses["region_adapt_loss"](est_latent, regions)
             note_loss = self.losses["note_loss"](note_logits, scores, presence, mask=n_mask)
             return {
-                "region_predict_loss": region_predict_loss,
+                "region_loss": region_loss,
                 "boundary_loss": boundary_loss,
-                "region_adapt_loss": region_adapt_loss,
                 "note_loss": note_loss,
             }
 
@@ -190,18 +184,18 @@ class MIDIExtractionModule(BaseLightningModule):
             # Choose random t, remove boundaries by p(t)
             t = torch.rand(B, device=x_seg.device)
             p = d3pm_time_schedule(t)
-            boundaries = remove_boundaries(boundaries, p=p)  # [B, T]
+            boundaries_noise = remove_boundaries(boundaries, p=p)  # [B, T]
         elif self.model_config.mode == "completion":
             # Choose random p, merge regions by p
             t = None
             p = torch.rand(B, device=x_seg.device)
-            boundaries = remove_boundaries(boundaries, p=p)  # [B, T]
+            boundaries_noise = remove_boundaries(boundaries, p=p)  # [B, T]
         else:
             raise ValueError(f"Unknown mode: {self.model_config.mode}.")
-        regions = boundaries_to_regions(boundaries, mask=mask)  # [B, T]
+        regions_noise = boundaries_to_regions(boundaries_noise, mask=mask)  # [B, T]
 
         logits, latent = self.model.forward_segmentation(
-            x_seg, regions=regions, t=t,
+            x_seg, noise=regions_noise, t=t,
             language=language_ids, mask=mask,
         )  # [B, T]
 
@@ -227,13 +221,13 @@ class MIDIExtractionModule(BaseLightningModule):
                 )  # [B, T]
                 regions = boundaries_to_regions(boundaries, mask=mask)  # [B, T]
                 logits, _ = self.model.forward_segmentation(
-                    x_seg, regions=regions, t=t,
+                    x_seg, noise=regions, t=t,
                     language=language_ids, mask=mask,
                 )  # [B, T]
                 boundaries = self._decode_boundaries(logits, mask)
         elif self.model_config.mode == "completion":
             # One-step prediction from no boundaries.
-            logits, _ = self.model(
+            logits, _ = self.model.forward_segmentation(
                 x_seg, regions=mask.long(),
                 language=language_ids, mask=mask,
             )  # [B, T]
@@ -253,14 +247,14 @@ class MIDIExtractionModule(BaseLightningModule):
         return boundaries
 
     def _forward_estimation(self, x_est, regions, max_n, t_mask, n_mask):
-        logits, latent = self.model.forward_estimation(
+        logits = self.model.forward_estimation(
             x_est, regions=regions, max_n=max_n,
             t_mask=t_mask, n_mask=n_mask,
         )  # [B, N, C_out]
-        return logits, latent
+        return logits
 
     def _forward_infer_estimation(self, x_est, regions, max_n, t_mask, n_mask):
-        logits, _ = self._forward_estimation(
+        logits = self._forward_estimation(
             x_est, regions=regions,
             max_n=max_n, t_mask=t_mask, n_mask=n_mask
         )

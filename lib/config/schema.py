@@ -98,7 +98,6 @@ class ModelConfig(ConfigBaseModel):
     use_glu: bool = Field(False)
     encoder: BackboneConfig = Field(...)
     segmenter: BackboneConfig = Field(...)
-    adaptor: BackboneConfig = Field(...)
     estimator: BackboneConfig = Field(...)
 
 

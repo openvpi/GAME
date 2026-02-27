@@ -1,7 +1,6 @@
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
 
 class RegionBias(nn.Module):
     """bias = -exp(log_alpha) * |region_i - region_j|, per head"""

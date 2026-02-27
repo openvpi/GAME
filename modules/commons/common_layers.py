@@ -1,6 +1,4 @@
-import numpy as np
 import torch
-import torch.nn.functional as F
 import torch.onnx.operators
 from einops import rearrange
 from torch import nn
@@ -46,6 +44,7 @@ class LocalDownsample(nn.Module):
         weight = weight[..., 1:, :]  # [..., N, T]
         x_down = weight @ x  # [..., N, T] @ [..., T, C] -> [..., N, C]
         return x_down  # [..., N, C]
+
 
 class AttentionDownsample(nn.Module):
     """
@@ -216,40 +215,4 @@ class AttentionDownsample(nn.Module):
         out_mask = out_mask.reshape(out.shape[0], P, 1).float()
         out = out * out_mask
 
-        return out
-
-
-
-class SoftTopKTokenSelect(nn.Module):
-    """
-    Soft version: 不做 hard selection，用 softmax 加权所有 token，
-    但 temperature 很低时近似 top-k 效果。
-    """
-    def __init__(self, dim, temperature=1.0):
-        super().__init__()
-        self.gate = nn.Sequential(
-            nn.Linear(dim, dim // 4),
-            nn.GELU(),
-            nn.Linear(dim // 4, 1),
-        )
-        self.temperature = temperature
-
-    def forward(self, x, regions, max_n=None):
-        B, T, C = x.shape
-        N = regions.max().item() if max_n is None else max_n
-        device = x.device
-
-        importance = self.gate(x).squeeze(-1) / self.temperature  # [B, T]
-        importance = importance.masked_fill(regions == 0, float('-inf'))
-
-        # Per-region softmax: [B, N, T]
-        region_ids = torch.arange(1, N + 1, device=device).view(1, N, 1)
-        region_mask = regions.unsqueeze(1) == region_ids  # [B, N, T]
-
-        weights = importance.unsqueeze(1).expand_as(region_mask).clone()
-        weights[~region_mask] = float('-inf')
-        weights = F.softmax(weights, dim=-1)  # [B, N, T]
-
-        # Weighted sum
-        out = weights @ x  # [B, N, T] @ [B, T, C] -> [B, N, C]
         return out

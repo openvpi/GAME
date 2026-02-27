@@ -161,7 +161,6 @@ def compute_positions_global(regions, region_token_num, max_n, use_pool_offset=F
     return pool_global_pos, x_global_pos, pool_region_idx, x_region_idx
 
 
-
 class LocalAttentionPoolDown(nn.Module):
     """
     Self-attention pool with local (within-region) mask.
@@ -231,7 +230,6 @@ class LocalAttentionPoolDown(nn.Module):
 
         # Return only pool token outputs
         return out[:, :, :P, :]
-
 
 
 class AttentionPoolDown(nn.Module):
@@ -330,7 +328,6 @@ class AttentionPoolDown(nn.Module):
         )
 
         return out[:, :, :P, :]
-
 
 
 class CrossAttentionDown(nn.Module):

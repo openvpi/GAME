@@ -1,8 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-
 
 
 def compute_inv_freq(dim: int, theta: float = 10000.0):
@@ -39,6 +36,8 @@ def apply_rotary_by_positions(x, positions, inv_freq):
     freqs_sin = freqs_sin.view(shape)
 
     return single_apply_rotary_emb(x, freqs_cos, freqs_sin)
+
+
 # ============================================================
 # Region position utilities
 # ============================================================

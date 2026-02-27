@@ -42,12 +42,12 @@ class SegmentationEstimationInferenceModel(nn.Module):
         self.model = SegmentationEstimationModel(model_config)
 
     def _forward_and_decode_boundaries(
-            self, x_seg, regions, mask,
+            self, x_seg, noise, mask,
             barriers, threshold, radius,
             language=None, t=None,
     ):
         logits, _ = self.model.forward_segmentation(
-            x_seg, regions=regions, t=t,
+            x_seg, noise=noise, t=t,
             language=language, mask=mask,
         )  # [B, T]
         soft_boundaries = logits.sigmoid()
@@ -61,7 +61,7 @@ class SegmentationEstimationInferenceModel(nn.Module):
     def _forward_and_decode_scores(
             self, x_est, regions, max_n, t_mask, n_mask, threshold
     ):
-        logits, _ = self.model.forward_estimation(
+        logits = self.model.forward_estimation(
             x_est, regions=regions, max_n=max_n,
             t_mask=t_mask, n_mask=n_mask,
         )  # [B, N, C_out]
@@ -114,10 +114,10 @@ class SegmentationEstimationInferenceModel(nn.Module):
             for i in range(Nt):
                 ti = torch.full((B,), fill_value=t[i], device=waveform.device)
                 p = d3pm_time_schedule(ti)
-                boundaries_noisy = remove_mutable_boundaries(boundaries, known_boundaries, p=p)
-                regions_noisy = boundaries_to_regions(boundaries_noisy, mask=t_mask)  # [B, T]
+                boundaries_noise = remove_mutable_boundaries(boundaries, known_boundaries, p=p)
+                regions_noise = boundaries_to_regions(boundaries_noise, mask=t_mask)  # [B, T]
                 boundaries = self._forward_and_decode_boundaries(
-                    x_seg, regions=regions_noisy, t=ti,
+                    x_seg, noise=regions_noise, t=ti,
                     language=language, mask=t_mask,
                     barriers=known_boundaries,
                     threshold=boundary_threshold,
@@ -126,7 +126,7 @@ class SegmentationEstimationInferenceModel(nn.Module):
         elif self.model_config.mode == "completion":
             known_regions = boundaries_to_regions(known_boundaries, mask=t_mask)  # [B, T]
             boundaries = self._forward_and_decode_boundaries(
-                x_seg, regions=known_regions,
+                x_seg, noise=known_regions,
                 language=language, mask=t_mask,
                 barriers=known_boundaries,
                 threshold=boundary_threshold,
