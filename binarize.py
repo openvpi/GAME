@@ -1,40 +1,8 @@
 import pathlib
 
 import click
-import dask
 
 from lib import logging
-from lib.config.formatter import ModelFormatter
-from lib.config.io import load_raw_config
-from lib.config.schema import RootConfig, BinarizerConfig
-
-__all__ = [
-    "binarize_datasets",
-]
-
-dask.config.set(scheduler="synchronous")
-
-
-def _load_and_log_config(config_path: pathlib.Path, scope: int = 0, overrides: list[str] = None) -> RootConfig:
-    config = load_raw_config(config_path, overrides)
-    config = RootConfig.model_validate(config, scope=scope)
-    config.resolve(scope_mask=scope)
-    config.check(scope_mask=scope)
-    formatter = ModelFormatter()
-    print(formatter.format(config.binarizer))
-    return config
-
-
-def binarize_datasets(
-        binarizer_cls, binarizer_config: BinarizerConfig
-):
-    from preprocessing.binarizer_base import BaseBinarizer
-    if not issubclass(binarizer_cls, BaseBinarizer):
-        raise ValueError(f"binarizer_cls must be a subclass of {BaseBinarizer.__name__}")
-    logging.info(f"Starting binarizer: {binarizer_cls.__name__}.")
-    binarizer = binarizer_cls(binarizer_config)
-    binarizer.process()
-    logging.success("Binarization completed.")
 
 
 def shared_options(func):
@@ -51,6 +19,10 @@ def shared_options(func):
             type=click.STRING, required=False,
             help="Override configuration values in dotlist format."
         ),
+        click.option(
+            "--eval", "eval_mode", is_flag=True, default=False, show_default=True,
+            help="Evaluation mode: the whole dataset will be processed as validation set."
+        )
     ]
     for option in options[::-1]:
         func = option(func)
@@ -59,12 +31,20 @@ def shared_options(func):
 
 @click.command(help="Binarize raw notes datasets.")
 @shared_options
-def main(config: pathlib.Path, override: list[str]):
-    config = _load_and_log_config(config, overrides=override)
-    from preprocessing.notes_binarizer import NotesBinarizer
-    binarize_datasets(
-        NotesBinarizer, config.binarizer
+def main(config: pathlib.Path, override: list[str], eval_mode: bool):
+    import dask
+    from preprocessing.api import (
+        load_config_for_binarization,
+        binarize_datasets,
     )
+    from preprocessing.notes_binarizer import NotesBinarizer
+    dask.config.set(scheduler="synchronous")
+
+    config = load_config_for_binarization(config, overrides=override)
+    if eval_mode:
+        logging.debug("Using evaluation mode.")
+    binarizer = NotesBinarizer(config, eval_mode=eval_mode)
+    binarize_datasets(binarizer=binarizer)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy
 import torch
 import tqdm
+import yaml
 
 from lib import logging
 from lib.config.schema import BinarizerConfig
@@ -37,8 +38,9 @@ class DataSample:
 class BaseBinarizer(abc.ABC):
     __data_attrs__: list[str] = None
 
-    def __init__(self, config: BinarizerConfig):
+    def __init__(self, config: BinarizerConfig, eval_mode=False):
         self.config = config
+        self.eval_mode = eval_mode
         self.data_dir: pathlib.Path = config.data_dir_resolved
         self.lang_map: dict[str, int] = {}
         self.timestep = config.features.timestep
@@ -58,6 +60,28 @@ class BaseBinarizer(abc.ABC):
     @abc.abstractmethod
     def process_item(self, item: MetadataItem) -> DataSample:
         pass
+
+    def split_dataset(self, metadata_list: list[MetadataItem]):
+        if self.eval_mode:
+            # Put all items into validation set and leave training set empty.
+            self.valid_items.extend(metadata_list)
+            self.valid_items.sort(key=lambda itm: itm.estimated_duration, reverse=True)
+        else:
+            validation_indices = sorted(random.sample(
+                range(len(metadata_list)),
+                k=min(self.config.validation_count, len(metadata_list))
+            ))
+            validation_indices_set = set(validation_indices)
+            for i, item in enumerate(metadata_list):
+                if i in validation_indices_set:
+                    self.valid_items.append(item)
+                else:
+                    self.train_items.append(item)
+            self.train_items.sort(key=lambda itm: itm.estimated_duration, reverse=True)
+        if not self.eval_mode and not self.train_items:
+            raise RuntimeError("Training set is empty.")
+        if not self.valid_items:
+            raise RuntimeError("Validation set is empty.")
 
     def free_lazy_modules(self):
         """
@@ -122,6 +146,7 @@ class BaseBinarizer(abc.ABC):
         logging.debug(f"Processing {prefix} items done.")
 
     def process(self):
+        # Collect metadata from all subsets
         index_file_paths = list(self.data_dir.rglob("index.csv"))
         metadata_list = []
         for index_file_path in index_file_paths:
@@ -129,35 +154,35 @@ class BaseBinarizer(abc.ABC):
             subset_metadata_list = self.load_metadata(subset_dir)
             metadata_list.extend(subset_metadata_list)
             logging.debug(f"Loaded {len(subset_metadata_list)} metadata items from '{subset_dir.as_posix()}'.")
-        validation_indices = sorted(random.sample(
-            range(len(metadata_list)),
-            k=min(self.config.validation_count, len(metadata_list))
-        ))
-        validation_indices_set = set(validation_indices)
+
+        # Collect language codes
         lang_set = set()
-        for i, item in enumerate(metadata_list):
-            if item.language is not None:
+        for item in metadata_list:
+            if item.language:
                 lang_set.add(item.language)
-            if i in validation_indices_set:
-                self.valid_items.append(item)
-            else:
-                self.train_items.append(item)
-        self.lang_map = {lang: i for i, lang in enumerate(sorted(lang_set), start=1)}
-        logging.info(f"Training set total size: {len(self.train_items)}.")
-        logging.info(f"Validation set total size: {len(self.valid_items)}.")
         if lang_set:
             logging.info(f"Languages found: {', '.join(sorted(lang_set))}.")
         else:
             logging.warning("No language information found.")
-        if not self.train_items:
-            raise RuntimeError("Training set is empty.")
-        if not self.valid_items:
-            raise RuntimeError("Validation set is empty.")
+        self.lang_map = {lang: i for i, lang in enumerate(sorted(lang_set), start=1)}
+
+        # Split training and validation sets
+        self.split_dataset(metadata_list)
+        logging.info(f"Training set total size: {len(self.train_items)}.")
+        logging.info(f"Validation set total size: {len(self.valid_items)}.")
+
+        # Copy description files
         with open(self.data_dir / "lang_map.json", "w", encoding="utf8") as f:
             json.dump(self.lang_map, f, ensure_ascii=False)
-        self.train_items.sort(key=lambda itm: itm.estimated_duration, reverse=True)
-        self.process_items(self.valid_items, prefix="valid", multiprocessing=False)
-        self.process_items(self.train_items, prefix="train", multiprocessing=True)
+        with open(self.data_dir / "feature.yaml", "w", encoding="utf8") as f:
+            yaml.safe_dump(self.config.features.model_dump(), f, allow_unicode=True, sort_keys=False)
+
+        # Process datasets
+        if self.eval_mode:
+            self.process_items(self.valid_items, prefix="valid", multiprocessing=True)
+        else:
+            self.process_items(self.valid_items, prefix="valid", multiprocessing=False)
+            self.process_items(self.train_items, prefix="train", multiprocessing=True)
 
 
 def find_waveform_file(subset_dir: pathlib.Path, item_name: str) -> pathlib.Path:
