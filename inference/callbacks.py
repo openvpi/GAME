@@ -344,7 +344,13 @@ class ExportMetricSummaryCallback(lightning.pytorch.callbacks.Callback):
             pl_module: InferenceModule,
             *args, **kwargs
     ) -> None:
-        summary = pl_module.summary
+        summary: dict[str, float] = {}
+        for name, metric in pl_module.metrics.items():
+            value = metric.compute()
+            if isinstance(value, dict):
+                summary.update(value)
+            else:
+                summary[name] = value
         self.save_path.parent.mkdir(parents=True, exist_ok=True)
         with self.save_path.open(encoding="utf8", mode="w") as f:
             json.dump(summary, f, indent=4)

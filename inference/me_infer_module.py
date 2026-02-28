@@ -29,7 +29,6 @@ class InferenceModule(lightning.pytorch.LightningModule):
         self.config = config
         self.timestep = self.model.timestep
         self.metrics: dict[str, torchmetrics.Metric] | None = None
-        self.summary: dict[str, float] | None = None
 
     def setup(self, stage: str) -> None:
         super().setup(stage)
@@ -79,10 +78,6 @@ class InferenceModule(lightning.pytorch.LightningModule):
             "scores": scores,
         }
 
-    def on_test_start(self) -> None:
-        for metric in self.metrics.values():
-            metric.reset()
-
     def test_step(self, batch: dict[str, Tensor], *args, **kwargs) -> None:
         spectrogram = batch["spectrogram"]
         if self.model_config.use_languages:
@@ -128,14 +123,6 @@ class InferenceModule(lightning.pytorch.LightningModule):
             "scores": scores_pred,
             "N": regions_pred.amax(dim=-1),
         }
-
-    def on_test_end(self) -> None:
-        for name, metric in self.metrics.items():
-            value = metric.compute()
-            if isinstance(value, dict):
-                self.summary.update(value)
-            else:
-                self.summary[name] = value
 
     def _update_metrics(
             self, boundaries_pred, regions_pred, presence_pred, scores_pred,
