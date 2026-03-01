@@ -157,7 +157,15 @@ def regions_to_local_positions_v2(regions):
     local_pos = cumsum - start_cumsum
     local_pos = local_pos * (regions > 0).long()
     return local_pos
-
+def regions_to_local_positions_v1(regions):
+    """O(T^2) original"""
+    B, T = regions.shape
+    valid = regions > 0
+    same_region = (regions.unsqueeze(-1) == regions.unsqueeze(-2))
+    causal = torch.tril(torch.ones(T, T, device=regions.device, dtype=torch.bool), diagonal=-1)
+    same_region_before = same_region & causal.unsqueeze(0) & valid.unsqueeze(-1) & valid.unsqueeze(-2)
+    local_pos = same_region_before.sum(dim=-1)
+    return local_pos * valid.long()
 
 def compute_positions_local(regions, region_token_num, max_n, use_pool_offset=False):
     B, T = regions.shape
