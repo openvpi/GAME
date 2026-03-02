@@ -527,11 +527,18 @@ class SplitJointAttention(nn.Module):
         # --- 2. x -> x (same-stream with RoPE) ---
         xx_out = F.scaled_dot_product_attention(x_q_r, x_k_r, x_v, attn_mask=xx_mask, dropout_p=dp)
 
+        # # --- 3. pool -> x (cross-stream, NO RoPE, use mask only) ---
+        # px_out = F.scaled_dot_product_attention(pool_q, x_k, x_v, attn_mask=px_mask, dropout_p=dp)
+        #
+        # # --- 4. x -> pool (cross-stream, NO RoPE, use mask only) ---
+        # xp_out = F.scaled_dot_product_attention(x_q, pool_k, pool_v, attn_mask=xp_mask, dropout_p=dp)
+
+
         # --- 3. pool -> x (cross-stream, NO RoPE, use mask only) ---
-        px_out = F.scaled_dot_product_attention(pool_q, x_k, x_v, attn_mask=px_mask, dropout_p=dp)
+        px_out = F.scaled_dot_product_attention(pool_q_r, x_k_r, x_v, attn_mask=px_mask, dropout_p=dp)
 
         # --- 4. x -> pool (cross-stream, NO RoPE, use mask only) ---
-        xp_out = F.scaled_dot_product_attention(x_q, pool_k, pool_v, attn_mask=xp_mask, dropout_p=dp)
+        xp_out = F.scaled_dot_product_attention(x_q_r, pool_k_r, pool_v, attn_mask=xp_mask, dropout_p=dp)
 
         # Combine: learnable merge of same-stream + cross-stream
         pp_flat = rearrange(pp_out, 'b h t d -> b t (h d)')
