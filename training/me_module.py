@@ -109,7 +109,6 @@ class MIDIExtractionModule(BaseLightningModule):
         durations = sample["durations"]
         t_mask = regions != 0
         n_mask = durations >= 0
-        max_n = durations.shape[1]
 
         if infer:
             boundaries_pred, presence_pred, scores_pred = self._forward_infer_e2e(
@@ -154,7 +153,7 @@ class MIDIExtractionModule(BaseLightningModule):
                 x_seg, language_ids=language_ids, boundaries=boundaries, mask=t_mask
             )
             note_logits = self._forward_estimation(
-                x_est, regions=regions, max_n=max_n, t_mask=t_mask, n_mask=n_mask
+                x_est, regions=regions, t_mask=t_mask, n_mask=n_mask
             )
             region_loss = self.losses["region_loss"](seg_latent, regions)
             boundary_loss = self.losses["boundary_loss"](boundary_logits, boundaries, mask=t_mask)
@@ -176,7 +175,7 @@ class MIDIExtractionModule(BaseLightningModule):
         max_idx = regions.amax(dim=-1, keepdim=True)  # [B, 1]
         n_mask = idx < max_idx  # [B, N]
         presence, scores = self._forward_infer_estimation(
-            x_est, regions=regions, max_n=max_n, t_mask=mask, n_mask=n_mask
+            x_est, regions=regions, t_mask=mask, n_mask=n_mask
         )
         return boundaries, presence, scores
 
@@ -248,17 +247,17 @@ class MIDIExtractionModule(BaseLightningModule):
         )
         return boundaries
 
-    def _forward_estimation(self, x_est, regions, max_n, t_mask, n_mask):
+    def _forward_estimation(self, x_est, regions, t_mask, n_mask):
         logits = self.model.forward_estimation(
-            x_est, regions=regions, max_n=max_n,
+            x_est, regions=regions,
             t_mask=t_mask, n_mask=n_mask,
         )  # [B, N, C_out]
         return logits
 
-    def _forward_infer_estimation(self, x_est, regions, max_n, t_mask, n_mask):
+    def _forward_infer_estimation(self, x_est, regions, t_mask, n_mask):
         logits = self._forward_estimation(
             x_est, regions=regions,
-            max_n=max_n, t_mask=t_mask, n_mask=n_mask
+            t_mask=t_mask, n_mask=n_mask
         )
         presence, scores = self._decode_notes(logits, mask=n_mask)
         return presence, scores

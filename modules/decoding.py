@@ -4,6 +4,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
+from deployment.context import is_export_mode
+
 
 def find_local_extremum(x: Tensor, threshold: float = None, radius: int = 2, maxima=True):
     """
@@ -15,13 +17,24 @@ def find_local_extremum(x: Tensor, threshold: float = None, radius: int = 2, max
     :param maxima: bool, if True, find local maxima; otherwise, find local minima
     :return: [..., T], 1 = extremum, 0 = non-extremum
     """
-    assert radius >= 1
+    if not is_export_mode():
+        assert radius >= 1
     infinite = float("+inf") if maxima else float("-inf")
     x_pad = F.pad(
         x, (radius, radius),
         mode="constant", value=infinite
     )  # [..., T + 2r]
-    windows = x_pad.unfold(dimension=-1, size=2 * radius + 1, step=1)  # [..., T, 2r+1]
+    if is_export_mode():
+        *B, T = x.shape
+        nB = x.ndim - 1
+        frame_idx = torch.arange(T, device=x.device, dtype=torch.long)  # [T]
+        window_idx = torch.arange(2 * radius + 1, device=x.device, dtype=torch.long)  # [2r+1]
+        unfold_idx = (frame_idx.unsqueeze(-1) + window_idx.unsqueeze(0))  # [T, 2r+1]
+        x_src = x_pad.unsqueeze(-2).expand(*((-1,) * nB), T, -1)  # [..., T, T+2r]
+        index = unfold_idx.reshape(*((1,) * nB), T, -1).expand(*B, -1, -1)  # [..., T, 2r+1]
+        windows = x_src.gather(dim=-1, index=index)  # [..., T, 2r+1]
+    else:
+        windows = x_pad.unfold(dimension=-1, size=2 * radius + 1, step=1)  # [..., T, 2r+1]
     if maxima:
         maxima = (windows.argmax(dim=-1) == radius)  # [..., T]
         if threshold is not None:

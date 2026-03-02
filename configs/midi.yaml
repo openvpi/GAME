@@ -49,14 +49,13 @@ model:
       c_out_drop: 0.1
       c_latent_drop: 0.0
   estimator:
-    cls: "modules.backbones.down_ebf.JEBFBackbone"
+    cls: "modules.backbones.ebf_with_joint_attention.JEBFBackbone"
     kwargs:
       dim: 256
       num_layers: 4
       num_heads: 8
       head_dim: 64
       pool_token_source: 'learnable'
-      rope_mode: 'mixed'  # 'local', 'global', 'mixed'
       c_kernel_size_pool: 7
       m_kernel_size_pool: 5
       c_kernel_size_x: 31
@@ -65,6 +64,11 @@ model:
       ffn_type: 'glu' # 'glu', 'ffn', 'cgmlp'
       ffn_latent_drop: 0.1
       ffn_out_drop: 0.1
+      attn_type: 'joint'
+      rope_mode: 'mixed'  # 'local', 'global', 'mixed'
+      use_region_bias: false
+      region_token_num: 1
+      pool_merge_mode: 'mean'
 
 training:
   loss:

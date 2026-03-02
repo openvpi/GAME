@@ -64,7 +64,7 @@ class SegmentationEstimationModel(nn.Module):
         x = x.squeeze(-1)
         return x, latent
 
-    def forward_estimation(self, x, regions, max_n: int, t_mask=None, n_mask=None):
+    def forward_estimation(self, x, regions, t_mask=None, n_mask=None):
         x = x + self.region_embedding(regions)
-        _, x_down = self.estimator(x, regions, t_mask=t_mask, n_mask=n_mask, max_n=max_n)
+        _, x_down = self.estimator(x, regions, t_mask=t_mask, n_mask=n_mask)
         return x_down

@@ -42,10 +42,20 @@ class SegmentationEstimationInferenceModel(nn.Module):
         self.model = SegmentationEstimationModel(model_config)
 
     def forward_and_decode_boundaries(
-            self, x_seg, noise, mask,
-            barriers, threshold, radius,
+            self, x_seg, known_boundaries, prev_boundaries,
+            mask, threshold, radius,
             language=None, t=None,
     ):
+        B = x_seg.size(0)
+        if self.model_config.mode == "d3pm":
+            t = t.unsqueeze(0).expand(B)
+            p = d3pm_time_schedule(t)
+            boundaries = remove_mutable_boundaries(prev_boundaries, known_boundaries, p=p)
+        elif self.model_config.mode == "completion":
+            boundaries = known_boundaries
+        else:
+            raise ValueError(f"Unknown mode: {self.model_config.mode}.")
+        noise = boundaries_to_regions(boundaries, mask=mask)  # [B, T]
         logits, _ = self.model.forward_segmentation(
             x_seg, noise=noise, t=t,
             language=language, mask=mask,
@@ -53,17 +63,18 @@ class SegmentationEstimationInferenceModel(nn.Module):
         soft_boundaries = logits.sigmoid()
         boundaries = decode_soft_boundaries(
             boundaries=soft_boundaries,
-            barriers=barriers, mask=mask,
+            barriers=known_boundaries, mask=mask,
             threshold=threshold, radius=radius,
         )  # [B, T]
         return boundaries
 
     def forward_and_decode_scores(
-            self, x_est, regions, max_n, t_mask, n_mask, threshold
-    ):
+            self, x_est: Tensor, regions: Tensor,
+            t_mask: Tensor, n_mask: Tensor,
+            threshold: Tensor,
+    ) -> tuple[Tensor, Tensor]:
         logits = self.model.forward_estimation(
-            x_est, regions=regions, max_n=max_n,
-            t_mask=t_mask, n_mask=n_mask,
+            x_est, regions=regions, t_mask=t_mask, n_mask=n_mask,
         )  # [B, N, C_out]
         probs = logits.sigmoid()
         scores, presence = decode_gaussian_blurred_probs(
@@ -86,7 +97,7 @@ class SegmentationEstimationInferenceModel(nn.Module):
     def forward_encoder(
             self, waveform: Tensor, duration: Tensor,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        spectrogram = self.to_spectrogram(waveform).mT  # [B, T, C]
+        spectrogram = self.to_spectrogram(waveform).transpose(-2, -1)  # [B, T, C]
         T = spectrogram.size(1)
         L = duration.div(self.timestep).round().long()  # [B]
         idx = torch.arange(T, dtype=torch.long, device=duration.device)  # [T]
@@ -99,30 +110,21 @@ class SegmentationEstimationInferenceModel(nn.Module):
             threshold, radius,
             language=None, t=None,
     ):
-        B = x_seg.size(0)
         if self.model_config.mode == "d3pm":
-            Nt = t.size(0)
             boundaries = known_boundaries
-            for i in range(Nt):
-                ti = torch.full((B,), fill_value=t[i], device=x_seg.device)
-                p = d3pm_time_schedule(ti)
-                boundaries_noise = remove_mutable_boundaries(boundaries, known_boundaries, p=p)
-                regions_noise = boundaries_to_regions(boundaries_noise, mask=mask)  # [B, T]
+            for ti in t:
                 boundaries = self.forward_and_decode_boundaries(
-                    x_seg, noise=regions_noise, t=ti,
+                    x_seg, known_boundaries=known_boundaries,
+                    prev_boundaries=boundaries, t=ti,
                     language=language, mask=mask,
-                    barriers=known_boundaries,
-                    threshold=threshold,
-                    radius=radius,
+                    threshold=threshold, radius=radius,
                 )  # [B, T]
         elif self.model_config.mode == "completion":
-            known_regions = boundaries_to_regions(known_boundaries, mask=mask)  # [B, T]
             boundaries = self.forward_and_decode_boundaries(
-                x_seg, noise=known_regions,
-                language=language, mask=mask,
-                barriers=known_boundaries,
-                threshold=threshold,
-                radius=radius,
+                x_seg, known_boundaries=known_boundaries,
+                prev_boundaries=None, t=None,
+                mask=mask, language=language,
+                threshold=threshold, radius=radius,
             )  # [B, T]
         else:
             raise ValueError(f"Unknown mode: {self.model_config.mode}.")
@@ -160,8 +162,7 @@ class SegmentationEstimationInferenceModel(nn.Module):
         max_idx = regions.amax(dim=-1, keepdim=True)  # [B, 1]
         n_mask = idx < max_idx  # [B, N]
         presence, scores = self.forward_and_decode_scores(
-            x_est, regions=regions, max_n=max_n,
-            t_mask=mask, n_mask=n_mask,
+            x_est, regions=regions, t_mask=mask, n_mask=n_mask,
             threshold=threshold,
         )
         return presence, scores
