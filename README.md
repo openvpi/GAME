@@ -6,7 +6,7 @@ GAME is the upgraded successor of [SOME](https://github.com/openvpi/SOME), desig
 
 ### Highlights
 
-1. Generative boundary extraction: trade-off quality with sampling steps through Discrete Denoising Diffusion Models (D3PM).
+1. Generative boundary extraction: trade-off quality with sampling steps through D3PM (Structured Denoising Diffusion Models in Discrete State-Spaces).
 2. Adaptive pipeline: notes and pitches can align and adapt to known boundaries.
 3. Robust model: works with dirty or separated voice mixed with noise, reverb or even accompaniments.
 4. Multilingual support: choose the corresponding or a similar language to improve the segmentation results.
