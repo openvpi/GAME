@@ -69,13 +69,13 @@ python infer.py align [path-or-glob] -m [model-path]
 
 For example, processing single dataset:
 
-```python
+```bash
 python infer.py align transcriptions.csv -m /path/to/model.ckpt --save-path transcriptions-midi.csv
 ```
 
 Processing all datasets matched by glob pattern:
 
-```python
+```bash
 python infer.py align *.transcriptions.csv -m /path/to/model.ckpt --save-name transcriptions-midi.csv
 ```
 
