@@ -6,9 +6,9 @@ GAME is the upgraded successor of [SOME](https://github.com/openvpi/SOME), desig
 
 ### Highlights
 
-1. Generative boundary extraction: trade-off quality with sampling steps through D3PM (Structured Denoising Diffusion Models in Discrete State-Spaces).
-2. Adaptive pipeline: notes and pitches can align and adapt to known boundaries.
-3. Robust model: works on dirty or separated voice mixed with noise, reverb or even accompaniments.
+1. Generative boundary extraction: **trade off quality and speed** through D3PM (Structured Denoising Diffusion Models in Discrete State-Spaces).
+2. Adaptive pipeline: notes and pitches can **align and adapt to known boundaries**.
+3. Robust model: **works on dirty or separated voice** mixed with noise, reverb or even accompaniments.
 4. Multilingual support: choose the right language or a similar one to improve the segmentation results.
 5. Thresholds of boundaries and note presence are adjustable.
 6. Produces floating point pitch values, same as what SOME does.
@@ -23,17 +23,17 @@ GAME is the upgraded successor of [SOME](https://github.com/openvpi/SOME), desig
 
 GAME is tested under Python 3.12, PyTorch 2.8.0, CUDA 12.9, Lightning 2.6.1. But it should have good compatibility.
 
-Step 0: You are recommended to start with a clean, separated UV or Conda environment with suitable Python version (tested under Python 3.12).
+Step 1: You are recommended to start with a clean, separated UV or Conda environment with suitable Python version.
 
-Step 1: Install the latest version of PyTorch from its [official website](https://pytorch.org/get-started/locally/).
+Step 2: Install the latest version of PyTorch from its [official website](https://pytorch.org/get-started/locally/).
 
-Step 2: Run:
+Step 3: Run:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Step 3: If you want to use pretrained models, download them from releases or discussions.
+Step 4: If you want to use pretrained models, download them from releases or discussions.
 
 ## Inference
 

@@ -27,6 +27,7 @@ def deploy_model(
         "samplerate": model.inference_config.features.audio_sample_rate,
         "timestep": model.timestep,
         "languages": lang_map,
+        "loop": model.model_config.mode == "d3pm",
         "embedding_dim": model.model_config.embedding_dim,
     }
     config_path = save_dir / "config.json"

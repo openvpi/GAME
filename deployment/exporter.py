@@ -192,8 +192,10 @@ class Exporter:
             input_kwarg_names.append("language")
         input_kwarg_names.append("known_boundaries")
         if self.model.model_config.mode == "d3pm":
-            input_kwarg_names.append("prev_boundaries")
-            input_kwarg_names.append("t")
+            input_kwarg_names.extend([
+                "prev_boundaries",
+                "t",
+            ])
         input_kwarg_names.extend([
             "maskT",
             "threshold",
