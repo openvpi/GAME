@@ -8,10 +8,10 @@ GAME is the upgraded successor of [SOME](https://github.com/openvpi/SOME), desig
 
 1. Generative boundary extraction: trade-off quality with sampling steps through D3PM (Structured Denoising Diffusion Models in Discrete State-Spaces).
 2. Adaptive pipeline: notes and pitches can align and adapt to known boundaries.
-3. Robust model: works with dirty or separated voice mixed with noise, reverb or even accompaniments.
-4. Multilingual support: choose the corresponding or a similar language to improve the segmentation results.
-5. Thresholds of boundary and note presence are adjustable.
-6. Produces floating point pitch values, same as SOME does.
+3. Robust model: works on dirty or separated voice mixed with noise, reverb or even accompaniments.
+4. Multilingual support: choose the right language or a similar one to improve the segmentation results.
+5. Thresholds of boundaries and note presence are adjustable.
+6. Produces floating point pitch values, same as what SOME does.
 
 ### Use cases
 
@@ -37,7 +37,7 @@ Step 3: If you want to use pretrained models, download them from releases or dis
 
 ## Inference
 
-### Process raw audio files
+### Transcribe raw audio files
 
 The inference script can process single or multiple audio files.
 
@@ -111,9 +111,9 @@ python infer.py align --help
    Each `index.csv` contains the following fields:
 
    - `name`: audio file name (without suffix).
-   - `language` (optional): code of the singing language, i. e. `zh`.
-   - `notes`: note pitch sequence split by spaces, i. e. `rest E3-3 G3+17 D3-9`. Use `librosa` to get note names like this.
-   - `durations`: note durations (in seconds) split by spaces, i. e. `1.570 0.878 0.722 0.70`.
+   - `language` (optional): code of the singing language, i.e. `zh`.
+   - `notes`: note pitch sequence split by spaces, i.e. `rest E3-3 G3+17 D3-9`. Use `librosa` to get note names like this.
+   - `durations`: note durations (in seconds) split by spaces, i.e. `1.570 0.878 0.722 0.70`.
 
 2. Natural noise datasets (optional). Collect any types of noise or accompaniments and put them into a directory. Be careful not to include singing voice or clear speech voice.
 
@@ -121,9 +121,9 @@ python infer.py align --help
 
 ### Configuration
 
-This repository uses an inheritable configuration system based on YAML format. Each configuration file can derive from others through `bases` key. Also, in proprocessing and training scripts, configurations can be overridden with dotlist-style CLI options like `key.path=value`. 
+This repository uses an inheritable configuration system based on YAML format. Each configuration file can derive from others through `bases` key. Also, in preprocessing and training scripts, configurations can be overridden with dotlist-style CLI options like `--override key.path=value`. 
 
-Most training hyperparameters and framework options are stored in [configs/base.yaml](configs/base.yaml), while model hyperparameters and data-related options are stored in [configs/midi.yaml](configs/midi.yaml). You can organize your own inheritance structure if you wish.
+Most training hyperparameters and framework options are stored in [configs/base.yaml](configs/base.yaml), while model hyperparameters and data-related options are stored in [configs/midi.yaml](configs/midi.yaml). You can also organize your own inheritance structure.
 
 Configure your dataset paths in the configuration:
 
@@ -151,7 +151,7 @@ Run the following command to preprocess the raw dataset:
 python binarize.py --config [config-path]
 ```
 
-Please note: only singing voice dataset and its labels are processed here. The trainer uses online augmentation, so you need to carry everything inside your singing voice, noise and reverb datasets if you need to train models on another machine.
+Please note that only singing voice dataset and its labels are processed here. The trainer uses online augmentation, so you need to carry everything inside your singing voice, noise and reverb datasets if you need to train models on another machine.
 
 ### Training
 
