@@ -173,6 +173,12 @@ You can start a TensorBoard process to see metrics and validation plots:
 tensorboard --logdir [experiment-dir]
 ```
 
+After validation, you can reduce the size of checkpoint by dropping optimizer states for inference only. Run the following command:
+
+```bash
+python reduce.py [input-ckpt-path] [output-pt-path]
+```
+
 ### Evaluation
 
 Model evaluation uses the same dataset structure, format and configuration file as training. Be sure to use the same feature arguments as the model to evaluate. It is also recommended to read the evaluation configuration:
