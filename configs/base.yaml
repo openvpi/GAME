@@ -71,7 +71,7 @@ training:
       name: "auto"
       kwargs:
         process_group_backend: nccl
-        find_unused_parameters: false
+        find_unused_parameters: true
     accumulate_grad_batches: 1
     gradient_clip_val: 1.0
   validation:
