@@ -83,10 +83,11 @@ def _validate_path_or_glob(ctx, param, value) -> str:
 
 
 def _t0_nstep_to_ts(t0: float, nsteps: int) -> list[float]:
-    if nsteps == 1:
-        return [t0]
-    step = (1 - t0) / (nsteps - 1)
-    return [t0 + i * step for i in range(nsteps)]
+    step = (1 - t0) / nsteps
+    return [
+        t0 + i * step
+        for i in range(nsteps)
+    ]
 
 
 def _get_language_id(language: str, lang_map: dict[str, int]) -> int:
