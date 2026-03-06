@@ -55,7 +55,6 @@ model:
       num_layers: 4
       num_heads: 8
       head_dim: 64
-      pool_token_source: 'learnable'
       c_kernel_size_pool: 7
       m_kernel_size_pool: 5
       c_kernel_size_x: 31

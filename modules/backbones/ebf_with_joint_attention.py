@@ -517,6 +517,8 @@ class SplitJointAttention(nn.Module):
                 pool_q_r, pool_k_r = self.rope(pool_q, pool_k, pool_gpos, pool_gpos, pool_lpos.float(),
                                                pool_lpos.float())
                 x_q_r, x_k_r = self.rope(x_q, x_k, x_gpos, x_gpos, x_lpos.float(), x_lpos.float())
+            else:
+                raise ValueError(f"Unknown rope_mode: {self.rope_mode}")
         else:
             pool_q_r, pool_k_r = pool_q, pool_k
             x_q_r, x_k_r = x_q, x_k
@@ -677,16 +679,16 @@ class JEBF(nn.Module):
             dropout_attn: float = 0.0,
             attn_out_drop_x: float = 0.0,
             attn_out_drop_pool: float = 0.0,
-
-            use_ls=True, ffn_type='glu', ffn_latent_drop=0.1, ffn_out_drop=0.1, skip_fist_ffn=False,skip_out_ffn=False,
+            skip_first_ffn=False, skip_out_ffn=False,
+            use_ls=True, ffn_type='glu', ffn_latent_drop=0.1, ffn_out_drop=0.1,
             attn_type: str = 'joint',
 
     ):
         super().__init__()
-        self.skip_fist_ffn = skip_fist_ffn
-        self.skip_out_ffn=skip_out_ffn
+        self.skip_first_ffn = skip_first_ffn
+        self.skip_out_ffn = skip_out_ffn
         if ffn_type == 'glu':
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.ffn1_x = GLUFFN(
                     dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
                     dropout_output=ffn_out_drop
@@ -705,7 +707,7 @@ class JEBF(nn.Module):
                     dropout_output=ffn_out_drop
                 )
         elif ffn_type == 'ffn':
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.ffn1_x = FFN(
                     dim, latent_dim=dim * 4,
                     dropout_latent=ffn_latent_drop,
@@ -728,7 +730,7 @@ class JEBF(nn.Module):
                     dropout_output=ffn_out_drop
                 )
         elif ffn_type == 'cgmlp':
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.ffn1_x = CgMLP(
                     dim, latent_dim=int(dim * 2.5), latent_drop=ffn_latent_drop,
                     out_drop=ffn_out_drop, kernel_size=21
@@ -747,7 +749,7 @@ class JEBF(nn.Module):
                     out_drop=ffn_out_drop, kernel_size=7
                 )
         elif ffn_type == 'eglu':
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.ffn1_x = HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0, bias=True)
                 self.ffn1_pool = HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0, bias=True)
 
@@ -766,7 +768,7 @@ class JEBF(nn.Module):
                          use_pool_offset=use_pool_offset, theta=theta, dropout_attn=dropout_attn,
                          attn_out_drop_x=attn_out_drop_x, attn_out_drop_pool=attn_out_drop_pool,
                          attn_type=attn_type, )
-        if not skip_fist_ffn:
+        if not skip_first_ffn:
             self.norm_ffn1_x = RMSnorm(dim)
             self.norm_ffn1_pool = RMSnorm(dim)
         if not skip_out_ffn:
@@ -777,7 +779,7 @@ class JEBF(nn.Module):
             if not skip_out_ffn:
                 self.lay_scale_ffn2_x = LayScale(dim)
                 self.lay_scale_ffn2_pool = LayScale(dim)
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.lay_scale_ffn1_x = LayScale(dim)
                 self.lay_scale_ffn1_pool = LayScale(dim)
 
@@ -788,7 +790,7 @@ class JEBF(nn.Module):
             if not skip_out_ffn:
                 self.lay_scale_ffn2_x = nn.Identity()
                 self.lay_scale_ffn2_pool = nn.Identity()
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.lay_scale_ffn1_x = nn.Identity()
                 self.lay_scale_ffn1_pool = nn.Identity()
 
@@ -806,7 +808,7 @@ class JEBF(nn.Module):
         if n_mask is not None:
             pool = pool.masked_fill(~pool_mask.unsqueeze(-1), 0)
 
-        if not self.skip_fist_ffn:
+        if not self.skip_first_ffn:
             x = self.lay_scale_ffn1_x(self.ffn1_x(self.norm_ffn1_x(x))) + x
             pool = self.lay_scale_ffn1_pool(self.ffn1_pool(self.norm_ffn1_pool(pool))) + pool
 
@@ -854,54 +856,6 @@ class LearnablePoolTokens(nn.Module):
         tokens = self.emb.unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1)  # [B, N, R, C]
         tokens = tokens * n_mask.unsqueeze(-1).unsqueeze(-1).float()
         return tokens.reshape(B, N * R, -1)
-
-
-class LocalAvgPoolTokens(nn.Module):
-    """Local average pooling per region."""
-
-    def __init__(self, dim, region_token_num=1):
-        super().__init__()
-        self.region_token_num = region_token_num
-        # Project to match region_token_num if > 1
-        if region_token_num > 1:
-            self.expand_proj = nn.Linear(dim, dim * region_token_num)
-        else:
-            self.expand_proj = None
-
-    def forward(self, x, regions, n_mask):
-        """
-        :param x: [B, T, C]
-        :param regions: [B, T]
-        :param n_mask: [B, N] bool
-        :return: [B, N * R, C]
-        """
-        B, T, C = x.shape
-        N = n_mask.shape[1]
-        R = self.region_token_num
-        device = x.device
-
-        # Compute local average per region
-        idx = torch.arange(N + 1, dtype=torch.long, device=device).reshape(1, -1, 1)  # [1, N+1, 1]
-        region_map = idx == regions.unsqueeze(-2)  # [B, N+1, T]
-        region_weight = region_map.float()
-        region_size = torch.where(
-            torch.any(region_map, dim=-1, keepdim=True),
-            region_weight.sum(dim=-1, keepdim=True),
-            1.0
-        )
-        weight = region_weight / region_size  # [B, N+1, T]
-        weight = weight[:, 1:, :]  # [B, N, T]
-        tokens = weight @ x  # [B, N, C]
-
-        # Expand to R tokens per region
-        if self.expand_proj is not None:
-            tokens = self.expand_proj(tokens)  # [B, N, C*R]
-            tokens = tokens.reshape(B, N, R, C)
-        else:
-            tokens = tokens.unsqueeze(2)  # [B, N, 1, C]
-
-        tokens = tokens * n_mask.unsqueeze(-1).unsqueeze(-1).float()
-        return tokens.reshape(B, N * R, C)
 
 
 # ============================================================
@@ -1024,7 +978,6 @@ class JEBFBackbone(nn.Module):  # todo 其他的到时候再说
             num_heads: int = 8,
             head_dim: int = 64,
             region_token_num: int = 1,
-            pool_token_source: str = 'learnable',  # 'learnable' or 'local_avg'
 
             # JEBF layer params
             c_kernel_size_pool: int = 7,
@@ -1049,7 +1002,7 @@ class JEBFBackbone(nn.Module):  # todo 其他的到时候再说
             ffn_out_drop: float = 0.1,
 
             use_out_norm: bool = True,
-            skip_fist_ffn=False,
+            skip_first_ffn=False,
             skip_out_ffn=False,
             pool_out_dim: int = None,
             attn_type: str = 'joint',  # split
@@ -1078,12 +1031,7 @@ class JEBFBackbone(nn.Module):  # todo 其他的到时候再说
         self.input_proj = nn.Linear(in_dim, dim)
 
         # Pool token generator
-        if pool_token_source == 'learnable':
-            self.pool_token_gen = LearnablePoolTokens(dim, region_token_num)
-        elif pool_token_source == 'local_avg':
-            self.pool_token_gen = LocalAvgPoolTokens(dim, region_token_num)
-        else:
-            raise ValueError(f"Unknown pool_token_source: {pool_token_source}")
+        self.pool_token_gen = LearnablePoolTokens(dim, region_token_num)
 
         # JEBF layers
         self.layers = nn.ModuleList([
@@ -1100,8 +1048,8 @@ class JEBFBackbone(nn.Module):  # todo 其他的到时候再说
                 attn_out_drop_pool=attn_out_drop_pool,
                 use_ls=use_ls, ffn_type=ffn_type,
                 ffn_latent_drop=ffn_latent_drop, ffn_out_drop=ffn_out_drop,
-                skip_fist_ffn=skip_fist_ffn,
-                attn_type=attn_type,skip_out_ffn=skip_out_ffn
+                skip_first_ffn=skip_first_ffn,
+                attn_type=attn_type, skip_out_ffn=skip_out_ffn
             )
             for _ in range(num_layers)
         ])

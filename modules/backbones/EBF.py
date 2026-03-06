@@ -229,15 +229,15 @@ class EBF(nn.Module):
             self, dim, num_heads, head_dim,
             c_kernel_size=31, m_kernel_size=31, use_rope=True, rope_cache=True,
             dropout_attn: float = 0.0, out_drop: float = 0.0, c_out_drop=0.1,
-            c_latent_drop=0.0, use_ls=True, ffn_type='glu', ffn_latent_drop=0.1, ffn_out_drop=0.1,skip_fist_ffn=False,
-            skip_out_ffn=False,
+            c_latent_drop=0.0, use_ls=True, ffn_type='glu', ffn_latent_drop=0.1, ffn_out_drop=0.1,
+            skip_first_ffn=False, skip_out_ffn=False,
     ):
         super().__init__()
-        self.skip_fist_ffn = skip_fist_ffn
-        self.skip_out_ffn=skip_out_ffn
+        self.skip_first_ffn = skip_first_ffn
+        self.skip_out_ffn = skip_out_ffn
 
         if ffn_type == 'glu':
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.ffn1 = GLUFFN(
                     dim, latent_dim=dim * 4, dropout_latent=ffn_latent_drop,
                     dropout_output=ffn_out_drop
@@ -248,7 +248,7 @@ class EBF(nn.Module):
                     dropout_output=ffn_out_drop
                 )
         elif ffn_type == 'ffn':
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.ffn1 = FFN(
                     dim, latent_dim=dim * 4,
                     dropout_latent=ffn_latent_drop,
@@ -261,7 +261,7 @@ class EBF(nn.Module):
                     dropout_output=ffn_out_drop
                 )
         elif ffn_type == 'cgmlp':
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.ffn1 = CgMLP(
                     dim, latent_dim=int(dim * 2.5), latent_drop=ffn_latent_drop,
                     out_drop=ffn_out_drop, kernel_size=21
@@ -272,10 +272,10 @@ class EBF(nn.Module):
                     out_drop=ffn_out_drop, kernel_size=7
                 )
         elif ffn_type == 'eglu':
-            if not skip_fist_ffn:
-                self.ffn1 =HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0,bias=True)
+            if not skip_first_ffn:
+                self.ffn1 = HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0, bias=True)
             if not skip_out_ffn:
-                self.ffn2 =HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0,bias=True)
+                self.ffn2 = HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0, bias=True)
 
         else:
             raise ValueError(f"Unknown ffn_type: {ffn_type}")
@@ -284,26 +284,26 @@ class EBF(nn.Module):
             dim, num_heads, head_dim, c_kernel_size, m_kernel_size, use_rope, rope_cache, dropout_attn,
             out_drop, c_out_drop, c_latent_drop
         )
-        if not skip_fist_ffn:
+        if not skip_first_ffn:
             self.norm1 = RMSnorm(dim)
         if not skip_out_ffn:
             self.norm2 = RMSnorm(dim)
 
         if use_ls:
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.lay_scale1 = LayScale(dim)
             self.lay_scale2 = LayScale(dim)
             if not skip_out_ffn:
                 self.lay_scale3 = LayScale(dim)
         else:
-            if not skip_fist_ffn:
+            if not skip_first_ffn:
                 self.lay_scale1 = nn.Identity()
             self.lay_scale2 = nn.Identity()
             if not skip_out_ffn:
                 self.lay_scale3 = nn.Identity()
 
     def forward(self, x, mask=None):
-        if not self.skip_fist_ffn:
+        if not self.skip_first_ffn:
             if mask is not None:
                 x = x.masked_fill(~mask.unsqueeze(-1), 0)
             x = self.lay_scale1(self.ffn1(self.norm1(x))) * 0.5 + x
@@ -341,16 +341,12 @@ class EBFBackbone(nn.Module):
             ffn_latent_drop: float = 0.1,
             ffn_out_drop: float = 0.1,
             use_out_norm: bool = True,
-            skip_fist_ffn=False,
+            skip_first_ffn=False,
             skip_out_ffn=False,
     ):
         super().__init__()
         if is_export_mode():
-            rope_cache=False
-        else:
-            pass
-
-
+            rope_cache = False
 
         self.use_out_norm = use_out_norm
         self.return_latent = return_latent
@@ -367,8 +363,9 @@ class EBFBackbone(nn.Module):
                 dropout_attn=dropout_attn, out_drop=out_drop,
                 c_out_drop=c_out_drop, c_latent_drop=c_latent_drop,
                 use_ls=use_ls, ffn_type=ffn_type,
-                ffn_latent_drop=ffn_latent_drop, ffn_out_drop=ffn_out_drop,        skip_fist_ffn=skip_fist_ffn,
-            skip_out_ffn=skip_out_ffn,)
+                ffn_latent_drop=ffn_latent_drop, ffn_out_drop=ffn_out_drop,
+                skip_first_ffn=skip_first_ffn, skip_out_ffn=skip_out_ffn,
+                )
             for _ in range(num_layers)
         ])
 
@@ -393,99 +390,6 @@ class EBFBackbone(nn.Module):
         latent = None
         for i, layer in enumerate(self.layers):
             x = layer(x, mask=mask)
-            if self.return_latent and i == self.latent_layer_idx - 1:
-                latent = self.latent_norm(x)
-                latent = self.latent_proj(latent)  # [B, T, C_latent]
-
-        if self.use_out_norm:
-            x = self.output_norm(x)
-        out = self.output_proj(x)  # [B, T, C_out]
-
-        if self.return_latent:
-            return out, latent
-        else:
-            return out
-
-
-class GeneratorEBFBackbone(nn.Module):
-    def __init__(
-            self, in_dim: int, out_dim: int, return_latent: bool,
-            dim: int = 256,
-            num_layers: int = 8,
-            latent_layer_idx: int = None,
-            latent_out_dim: int = 16,
-            num_heads: int = 8,
-            head_dim: int = 64,
-            c_kernel_size: int = 31,
-            m_kernel_size: int = 31,
-            use_rope: bool = True,
-            rope_cache: bool = True,
-            dropout_attn: float = 0.0,
-            out_drop: float = 0.0,
-            c_out_drop: float = 0.1,
-            c_latent_drop: float = 0.0,
-            use_ls: bool = True,
-            ffn_type: str = 'glu',
-            ffn_latent_drop: float = 0.1,
-            ffn_out_drop: float = 0.1,
-            use_out_norm: bool = True,
-            skip_fist_ffn=False,
-            skip_out_ffn=False,
-    ):
-        super().__init__()
-        if is_export_mode():
-            rope_cache=False
-        else:
-            pass
-        self.use_out_norm = use_out_norm
-        self.return_latent = return_latent
-        if return_latent:
-            assert latent_layer_idx <= num_layers
-        self.latent_layer_idx = latent_layer_idx
-
-        self.input_proj = nn.Linear(in_dim, dim)
-
-        self.layers = nn.ModuleList([
-            EBF(dim=dim, num_heads=num_heads, head_dim=head_dim,
-                c_kernel_size=c_kernel_size, m_kernel_size=m_kernel_size,
-                use_rope=use_rope, rope_cache=rope_cache,
-                dropout_attn=dropout_attn, out_drop=out_drop,
-                c_out_drop=c_out_drop, c_latent_drop=c_latent_drop,
-                use_ls=use_ls, ffn_type=ffn_type,
-                ffn_latent_drop=ffn_latent_drop, ffn_out_drop=ffn_out_drop, skip_fist_ffn=skip_fist_ffn,
-            skip_out_ffn=skip_out_ffn,)
-            for _ in range(num_layers)
-        ])
-
-        if self.return_latent:
-            self.latent_norm = RMSnorm(dim)
-            self.latent_proj = nn.Linear(dim, latent_out_dim)  # -> [B, T, C_latent]
-        if self.use_out_norm:
-            self.output_norm = RMSnorm(dim)
-        self.output_proj = nn.Linear(dim, out_dim)  # -> [B, T, C_out]
-        # self.time_proj=nn.Sequential(
-        #     nn.Linear(1, dim * 4),
-        #     nn.GELU(),
-        #     nn.Linear(dim * 4, dim)
-        # )
-
-    def forward(self, x,times, mask=None):
-        """
-        Args:
-            time_emb: [B, T, C] time embedding
-            x: [B, T, in_dim] input tensor
-            mask: [B, T] valid mask
-        Returns:
-            latent: [B, T, C_latent] intermediate latent tensor for self cosine similarity
-            out: [B, T, C_out] output tensor
-        """
-        x = self.input_proj(x)
-        # time_emb=self.time_proj(times.unsqueeze(-1))
-
-        latent = None
-        for i, layer in enumerate(self.layers):
-            x = layer(x, mask=mask)
-            # x = layer(x + time_emb, mask=mask)
             if self.return_latent and i == self.latent_layer_idx - 1:
                 latent = self.latent_norm(x)
                 latent = self.latent_proj(latent)  # [B, T, C_latent]
