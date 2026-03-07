@@ -7,7 +7,7 @@ GAME is the upgraded successor of [SOME](https://github.com/openvpi/SOME), desig
 ### Highlights
 
 1. Generative boundary extraction: **trade off quality and speed** through D3PM (Structured Denoising Diffusion Models in Discrete State-Spaces).
-2. Adaptive pipeline: notes and pitches can **align and adapt to known boundaries**.
+2. Adaptive architecture: notes and pitches can **align and adapt to known boundaries**.
 3. Robust model: **works on dirty or separated voice** mixed with noise, reverb or even accompaniments.
 4. Multilingual support: choose the right language or a similar one to improve the segmentation results.
 5. Thresholds of boundaries and note presence are adjustable.
@@ -25,7 +25,7 @@ GAME is tested under Python 3.12, PyTorch 2.8.0, CUDA 12.9, Lightning 2.6.1. But
 
 Step 1: You are recommended to start with a clean, separated UV or Conda environment with suitable Python version.
 
-Step 2: Install the latest version of PyTorch from its [official website](https://pytorch.org/get-started/locally/).
+Step 2: Install the latest version of PyTorch following its [official website](https://pytorch.org/get-started/locally/).
 
 Step 3: Run:
 
@@ -33,7 +33,7 @@ Step 3: Run:
 pip install -r requirements.txt
 ```
 
-Step 4: If you want to use pretrained models, download them from releases or discussions.
+Step 4: If you want to use pretrained models, download them from [releases](https://github.com/openvpi/GAME/releases) or [discussions](https://github.com/openvpi/GAME/discussions).
 
 ## Inference
 
@@ -121,7 +121,7 @@ python infer.py align --help
 
 ### Configuration
 
-This repository uses an inheritable configuration system based on YAML format. Each configuration file can derive from others through `bases` key. Also, in preprocessing and training scripts, configurations can be overridden with dotlist-style CLI options like `--override key.path=value`. 
+This repository uses an inheritable configuration system based on YAML format. Each configuration file can derive from others through `bases` key. Also, in preprocessing, training and evaluation scripts, configurations can be overridden with dotlist-style CLI options like `--override key.path=value`. 
 
 Most training hyperparameters and framework options are stored in [configs/base.yaml](configs/base.yaml), while model hyperparameters and data-related options are stored in [configs/midi.yaml](configs/midi.yaml). You can also organize your own inheritance structure.
 
