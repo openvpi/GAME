@@ -87,41 +87,43 @@ For detailed descriptions of more functionalities and options, please run the fo
 python infer.py align --help
 ```
 
-#### Important notice for v/uv flags and word-note alignment
-
-Word boundaries have slightly different definitions between DiffSinger and GAME:
-
-- In DiffSinger, some special unvoiced tags like `AP` (breathing) and `SP` (space) are considered as independent words, with boundaries between them.
-- In GAME, consecutive unvoiced notes are merged into whole unvoiced regions, with no boundaries inside.
-
-To improve the alignment of v/uv flags between words and notes, we should also merge consecutive unvoiced words before inference. This process is done automatically by the inference API and will not affect the original phoneme sequence. For better comprehension, here is an examples of v/uv flags and word-note alignment:
-
-```text
-ph_seq       | n  |  i   | h  |      ao       |  SP  |   AP   |  => phoneme names
-ph_dur       |0.05| 0.07 |0.05|     0.16      | 0.07 |  0.09  |  => phoneme durations
-ph_num       | 1  |     2     |       1       |  1   |   1    |  => word spans
-word_dur     |0.05|   0.12    |     0.16      | 0.07 |  0.09  |  => word durations
-word_vuv     | 0  |     1     |       1       |  0   |   0    |  => word v/uv
-word_dur_m   |0.05|   0.12    |     0.16      |     0.16      |  => word durations (after merging)
-word_vuv_m   | 0  |    1      |       1       |      0        |  => word v/uv (after merging)
-note_seq     | C4 |    C4     |  D4   |  E4   |      E4       |  => note names (predicted)
-note_vuv     | 0  |    1      |   1   |   1   |       0       |  => note v/uv (predicted)
-note_dur     |0.05|    0.12   | 0.08  | 0.08  |     0.16      |  => note durations (predicted)
-note_seq_a   |rest|    C4     |  D4   |  E4   | rest |  rest  |  => note names (after alignment)
-note_dur_a   |0.05|    0.12   | 0.08  | 0.08  | 0.07 |  0.09  |  => note durations (after alignment)
-note_slur    | 0  |     0     |   0   |   1   |  0   |   0    |  => note slur flags (after alignment)
-```
-
-By default, a word is considered as unvoiced if its leading phoneme hits a built-in unvoiced phoneme set, and note v/uv flags are predicted by the model. This logic can be controlled through the following options:
-
-- `--uv-vocab` and `--uv-vocab-path` defines the unvoiced phoneme set.
-- `--uv-word-cond` sets the condition for judging a word as unvoiced.
-  - `lead` (default): If the leading phoneme is unvoiced, the word is unvoiced. This is enough for most cases because normal words start with vowels. In this mode, you only need to define special tags in the unvoiced phoneme set.
-  - `all`: If all phonemes are unvoiced, the word is unvoiced. This is the most precise way to judge unvoiced words, but you need to define all special tags and consonants in the unvoiced phoneme set.
-- `--uv-note-cond` sets the condition for judging a note as unvoiced.
-  - `predict` (default): Note u/uv flags are predicted by the model and decoded with a threshold.
-  - `follow`: Note u/uv flags follow word v/uv flags. If you use this mode, you still need to define all special tags and consonants in the unvoiced phoneme set (because sometimes the first word only has one consonant in it).
-- `--no-wb` bypasses all logic above, with no word-note alignment, and everything is purely predicted by the model. Also, no `note_slur` column will be written since the word information is unavailable. Not recommended.
+> [!IMPORTANT]
+>
+> #### Notice for v/uv flags and word-note alignment
+>
+> Word boundaries have slightly different definitions between DiffSinger and GAME:
+>
+> - In DiffSinger, some special unvoiced tags like `AP` (breathing) and `SP` (space) are considered as independent words, with boundaries between them.
+> - In GAME, consecutive unvoiced notes are merged into whole unvoiced regions, with no boundaries inside.
+>
+> To improve the alignment of v/uv flags between words and notes, we should also merge consecutive unvoiced words before inference. This process is done automatically by the inference API and will not affect the original phoneme sequence. For better comprehension, here is an examples of v/uv flags and word-note alignment:
+>
+> ```text
+> ph_seq       | n  |  i   | h  |      ao       |  SP  |   AP   |  => phoneme names
+> ph_dur       |0.05| 0.07 |0.05|     0.16      | 0.07 |  0.09  |  => phoneme durations
+> ph_num       | 1  |     2     |       1       |  1   |   1    |  => word spans
+> word_dur     |0.05|   0.12    |     0.16      | 0.07 |  0.09  |  => word durations
+> word_vuv     | 0  |     1     |       1       |  0   |   0    |  => word v/uv
+> word_dur_m   |0.05|   0.12    |     0.16      |     0.16      |  => word durations (after merging)
+> word_vuv_m   | 0  |    1      |       1       |      0        |  => word v/uv (after merging)
+> note_seq     | C4 |    C4     |  D4   |  E4   |      E4       |  => note names (predicted)
+> note_vuv     | 0  |    1      |   1   |   1   |       0       |  => note v/uv (predicted)
+> note_dur     |0.05|    0.12   | 0.08  | 0.08  |     0.16      |  => note durations (predicted)
+> note_seq_a   |rest|    C4     |  D4   |  E4   | rest |  rest  |  => note names (after alignment)
+> note_dur_a   |0.05|    0.12   | 0.08  | 0.08  | 0.07 |  0.09  |  => note durations (after alignment)
+> note_slur    | 0  |     0     |   0   |   1   |  0   |   0    |  => note slur flags (after alignment)
+> ```
+>
+> By default, a word is considered as unvoiced if its leading phoneme hits a built-in unvoiced phoneme set, and note v/uv flags are predicted by the model. This logic can be controlled through the following options:
+>
+> - `--uv-vocab` and `--uv-vocab-path` defines the unvoiced phoneme set.
+> - `--uv-word-cond` sets the condition for judging a word as unvoiced.
+>   - `lead` (default): If the leading phoneme is unvoiced, the word is unvoiced. This is enough for most cases because normal words start with vowels. In this mode, you only need to define special tags in the unvoiced phoneme set.
+>   - `all`: If all phonemes are unvoiced, the word is unvoiced. This is the most precise way to judge unvoiced words, but you need to define all special tags and consonants in the unvoiced phoneme set.
+> - `--uv-note-cond` sets the condition for judging a note as unvoiced.
+>   - `predict` (default): Note u/uv flags are predicted by the model and decoded with a threshold.
+>   - `follow`: Note u/uv flags follow word v/uv flags. If you use this mode, you still need to define all special tags and consonants in the unvoiced phoneme set (because sometimes the first word only has one consonant in it).
+> - `--no-wb` bypasses all logic above, with no word-note alignment, and everything is purely predicted by the model. Also, no `note_slur` column will be written since the word information is unavailable. Not recommended.
 
 ## Training
 
