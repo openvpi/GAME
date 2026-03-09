@@ -396,7 +396,7 @@ def extract(
     )
 )
 @click.option(
-    "--uv-vocab", type=str, default="AP,SP,sil,br", show_default=True,
+    "--uv-vocab", type=str, default="AP,SP,br,sil", show_default=True,
     callback=_validate_uv_vocab,
     help=(
         "Comma-separated list of unvoiced phoneme names."
