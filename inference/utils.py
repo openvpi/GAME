@@ -123,7 +123,7 @@ def align_notes_to_words(
         if word_start[word_idx] < note_start[note_start_idx] - tol:
             note_start_idx = max(0, note_start_idx - 1)
         # find the closest note end
-        note_end_idx = np.argmin(np.abs(note_end - word_end[word_idx]))
+        note_end_idx = np.argmin(np.abs(note_end[note_start_idx:] - word_end[word_idx])) + note_start_idx
         if word_end[word_idx] > note_end[note_end_idx] + tol:
             note_end_idx = min(len(note_end) - 1, note_end_idx + 1)
         # adjust note sequence and durations to fit the word duration
