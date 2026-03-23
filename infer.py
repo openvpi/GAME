@@ -157,6 +157,11 @@ def shared_options(func=None, *, defaults: dict[str, Any] = None):
             help="Number of worker processes for dataloader."
         ),
         click.option(
+            "--precision", type=str, show_default=True,
+            default="32-true",
+            help="Precision for inference."
+        ),
+        click.option(
             "--seg-threshold", type=click.FloatRange(
                 min=0, min_open=False, max=1, max_open=True
             ), show_default=True,
@@ -275,6 +280,7 @@ def extract(
         language: str,
         batch_size: int,
         num_workers: int,
+        precision: str,
         seg_threshold: float,
         seg_radius: float,
         t0: float,
@@ -350,9 +356,10 @@ def extract(
             boundary_decoding_radius=round(seg_radius / model.timestep),
             note_presence_threshold=est_threshold,
         ),
+        callbacks=callbacks,
         batch_size=batch_size,
         num_workers=num_workers,
-        callbacks=callbacks,
+        precision=precision,
     )
     logging.success("Inference completed.", callback=rank_zero_info)
 
@@ -436,6 +443,7 @@ def align(
         language: str,
         batch_size: int,
         num_workers: int,
+        precision: str,
         seg_threshold: float,
         seg_radius: float,
         t0: float,
@@ -523,9 +531,10 @@ def align(
             boundary_decoding_radius=round(seg_radius / model.timestep),
             note_presence_threshold=est_threshold,
         ),
+        callbacks=callbacks,
         batch_size=batch_size,
         num_workers=num_workers,
-        callbacks=callbacks,
+        precision=precision,
     )
     logging.success("Inference completed.", callback=rank_zero_info)
 

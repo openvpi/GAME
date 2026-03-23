@@ -105,13 +105,15 @@ def infer_model(
         model: SegmentationEstimationInferenceModel,
         dataset: torch.utils.data.Dataset,
         config: ValidationConfig,
-        batch_size: int,
-        num_workers: int,
         callbacks: list[lightning.pytorch.callbacks.Callback],
+        batch_size: int = 1,
+        num_workers: int = 0,
+        precision: str = "32-true",
         mode: Literal["predict", "evaluate"] = "predict",
 ):
     module = InferenceModule(model=model, config=config)
     trainer = lightning.pytorch.Trainer(
+        precision=precision,
         logger=False,
         enable_checkpointing=False,
         callbacks=callbacks,

@@ -59,6 +59,10 @@ from lib import logging
     default=0,
     help="Number of worker processes for dataloader."
 )
+@click.option(
+    "--precision", type=click.STRING, default="32-true", show_default=True,
+    help="Precision for evaluation."
+)
 def main(
         dataset: pathlib.Path,
         model: pathlib.Path,
@@ -68,6 +72,7 @@ def main(
         plot: bool,
         batch_size: int,
         num_workers: int,
+        precision: str,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
     from inference.api import (
@@ -111,9 +116,10 @@ def main(
         model=model,
         dataset=dataset,
         config=validation_config,
+        callbacks=callbacks,
         batch_size=batch_size,
         num_workers=num_workers,
-        callbacks=callbacks,
+        precision=precision,
         mode="evaluate",
     )
     logging.success("Evaluation completed.", callback=rank_zero_info)

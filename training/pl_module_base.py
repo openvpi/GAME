@@ -386,7 +386,7 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         self.logger.log_metrics({f"validation/{k}": v for k, v in loss_vals.items()}, step=self.global_step)
         self.logger.log_metrics({f"validation/{k}": v for k, v in metric_vals.items()}, step=self.global_step)
         filelist = list(pathlib.Path(self.logger.log_dir).glob(f"validation_step{self.global_step}_rank*_batch*.pt"))
-        with torch.autocast(self.device.type, enabled=False):
+        with torch.autocast(self.device.type, enabled=self.training_config.validation.allow_amp):
             for file in tqdm.tqdm(filelist, desc="Plotting", leave=False):
                 obj = torch.load(file, map_location=self.device, weights_only=True)
                 sample = obj["sample"]

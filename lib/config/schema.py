@@ -326,6 +326,7 @@ class TrainerConfig(ConfigBaseModel):
 
 
 class ValidationConfig(ConfigBaseModel):
+    allow_amp: bool = Field(False)
     max_plots: int = Field(100, ge=0)
     parallel_dirty_metrics: bool = Field(True)
     d3pm_sample_t0: float = Field(0.0, ge=0)

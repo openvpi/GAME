@@ -75,6 +75,7 @@ training:
     accumulate_grad_batches: 1
     gradient_clip_val: 1.0
   validation:
+    allow_amp: false
     max_plots: 10
     parallel_dirty_metrics: true
   finetuning:
