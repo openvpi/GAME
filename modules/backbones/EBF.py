@@ -32,11 +32,8 @@ class AttentionWithRoPE(nn.Module):
             self.rope = None
 
     def forward(self, x):
-
         q = self.q_linear(x)
-
         k, v = self.kv_linear(x).chunk(2, dim=-1)
-
         q, k, v = map(
             lambda t: rearrange(t, "b t (h c) -> b h t c", h=self.num_heads), (q, k, v)
         )
@@ -147,7 +144,6 @@ class EBF(nn.Module):
                 self.ffn1 = HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0, bias=True)
             if not skip_out_ffn:
                 self.ffn2 = HalfCacheGLUFFN(d_model=dim, d_ff=dim * 4, gate_type='silu', quant_bits=0, bias=True)
-
         else:
             raise ValueError(f"Unknown ffn_type: {ffn_type}")
 

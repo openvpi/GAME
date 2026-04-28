@@ -42,7 +42,6 @@ class GLUFFN(nn.Module):
         if latent_dim is None:
             latent_dim = dim * 4
         self.ln1 = nn.Linear(dim, latent_dim * 2)
-
         self.ln2 = nn.Linear(latent_dim, dim)
         self.dropout_latent = nn.Dropout(dropout_latent) if dropout_latent > 0. else nn.Identity()
         self.dropout_output = nn.Dropout(dropout_output) if dropout_output > 0. else nn.Identity()
