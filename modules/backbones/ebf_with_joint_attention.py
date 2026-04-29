@@ -2,8 +2,12 @@ import torch
 import torch.nn as nn
 
 from modules.backbones.eglu import HalfCacheGLUFFN
-from modules.backbones.joint_attn import JointAttention, SplitJointAttention, build_joint_attention_mask, \
-    build_split_attention_masks
+from modules.backbones.joint_attn import (
+    JointAttention, SplitJointAttention,
+    build_joint_attention_mask_components,
+    build_joint_attention_mask,
+    build_split_attention_masks,
+)
 from modules.backbones.layers import LayerScale, RMSNorm, GLUFFN, FFN, CgMLP
 from modules.backbones.pool_tokens import LearnablePoolTokens, PoolTokenMerger
 from modules.backbones.regions import RegionBias
@@ -394,45 +398,16 @@ class JEBFBackbone(nn.Module):
         Same-stream: 0.0 (or -10000 for invalid)
         Cross-stream: region_bias decay (or -10000 for invalid)
         """
-        B, T = regions.shape
-        N = n_mask.shape[1]
-        R = region_token_num
-        P = N * R
-        device = regions.device
+        full_region, same_stream, _, valid_pair = build_joint_attention_mask_components(
+            regions, region_token_num, t_mask, n_mask
+        )
 
-        # Pool tokens region indices
-        pool_region = torch.arange(1, N + 1, device=device) \
-            .unsqueeze(-1).expand(-1, R).reshape(1, P).expand(B, -1)
-        full_region = torch.cat([pool_region, regions], dim=-1)  # [B, P+T]
+        base_mask = torch.where(valid_pair, 0.0, -10000.0)
 
-        # Valid masks
-        pool_valid = n_mask.unsqueeze(-1).expand(-1, -1, R).reshape(B, P)
-        full_valid = torch.cat([pool_valid, t_mask], dim=-1)  # [B, P+T]
-
-        # Is pool token
-        is_pool = torch.cat([
-            torch.ones(B, P, device=device, dtype=torch.bool),
-            torch.zeros(B, T, device=device, dtype=torch.bool),
-        ], dim=-1)  # [B, P+T]
-
-        # Same stream mask
-        same_stream = is_pool.unsqueeze(-1) == is_pool.unsqueeze(-2)  # [B, P+T, P+T]
-
-        # Valid pairs
-        valid_pair = full_valid.unsqueeze(-1) & full_valid.unsqueeze(-2)  # [B, P+T, P+T]
-
-        # Base mask: -10000 for invalid, 0 for valid
-        base_mask = torch.where(valid_pair, 0.0, -10000.0)  # [B, P+T, P+T]
-
-        # Region bias for cross-stream
-        region_decay = self.region_bias(full_region, full_region)  # [B, 1, P+T, P+T]
-        region_decay = region_decay.squeeze(1)  # [B, P+T, P+T]
-
-        # Apply region bias only to cross-stream (different stream)
-        # Same-stream: keep 0, Cross-stream: add region decay
+        region_decay = self.region_bias(full_region, full_region).squeeze(1)
         attn_bias = torch.where(same_stream, base_mask, base_mask + region_decay)
 
-        return attn_bias.unsqueeze(1)  # [B, 1, P+T, P+T]
+        return attn_bias.unsqueeze(1)
 
     def forward(self, x, regions, t_mask, n_mask, ):
         """

@@ -17,19 +17,7 @@ def fill_with_attn_mask(x, attn_mask):
     return x
 
 
-def build_joint_attention_mask(regions, region_token_num, t_mask, n_mask):
-    """
-    构建 MMDiT attention mask。
-
-    Args:
-        regions: [B, T] 每个时间步的区域ID (0=padding, 1~N=有效区域)
-        region_token_num: R, 每个区域的pool token数量
-        t_mask: [B, T] 时间步有效性mask
-        n_mask: [B, N] 区域有效性mask
-
-    Returns:
-        mask: [B, 1, P+T, P+T] attention mask (True=可attend)
-    """
+def build_joint_attention_mask_components(regions, region_token_num, t_mask, n_mask):
     B, T = regions.shape
     N = n_mask.shape[1]
     R = region_token_num
@@ -61,11 +49,31 @@ def build_joint_attention_mask(regions, region_token_num, t_mask, n_mask):
     non_pad_region = (full_region != 0).unsqueeze(-1) & (full_region != 0).unsqueeze(-2)
     same_region = same_region & non_pad_region
 
-    # 最终规则: same_stream OR same_region
-    attn_allowed = same_stream | same_region
-
     # 只有有效的pair才能attend
     valid_pair = full_valid.unsqueeze(-1) & full_valid.unsqueeze(-2)
+
+    return full_region, same_stream, same_region, valid_pair
+
+
+def build_joint_attention_mask(regions, region_token_num, t_mask, n_mask):
+    """
+    构建 MMDiT attention mask。
+
+    Args:
+        regions: [B, T] 每个时间步的区域ID (0=padding, 1~N=有效区域)
+        region_token_num: R, 每个区域的pool token数量
+        t_mask: [B, T] 时间步有效性mask
+        n_mask: [B, N] 区域有效性mask
+
+    Returns:
+        mask: [B, 1, P+T, P+T] attention mask (True=可attend)
+    """
+    _, same_stream, same_region, valid_pair = build_joint_attention_mask_components(
+        regions, region_token_num, t_mask, n_mask
+    )
+
+    # 最终规则: same_stream OR same_region
+    attn_allowed = same_stream | same_region
 
     return (attn_allowed & valid_pair).unsqueeze(1)
 
