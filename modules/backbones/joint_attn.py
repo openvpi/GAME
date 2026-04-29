@@ -12,7 +12,7 @@ from modules.backbones.rope import RegionRoPE
 def fill_with_attn_mask(x, attn_mask):
     # In some buggy ONNX exporting logic, fully masked queries may produce NaN.
     # We fix this by manually filling zeros to match the PyTorch native behavior.
-    if is_export_mode():
+    if is_export_mode() and attn_mask is not None:
         x = torch.where(attn_mask.any(dim=-2).unsqueeze(-1), x, 0)
     return x
 
@@ -70,7 +70,7 @@ def build_joint_attention_mask(regions, region_token_num, t_mask, n_mask):
     return (attn_allowed & valid_pair).unsqueeze(1)
 
 
-class JointAttention(nn.Module):
+class JointAttentionBase(nn.Module):
     def __init__(
             self, dim,
             num_heads,
@@ -87,6 +87,8 @@ class JointAttention(nn.Module):
     ):
         super().__init__()
 
+        self.dim = dim
+        self.attn_dim = num_heads * head_dim
         self.out_drop_x = nn.Dropout(out_drop_x) if out_drop_x > 0. else nn.Identity()
         self.out_drop_pool = nn.Dropout(out_drop_pool) if out_drop_pool > 0. else nn.Identity()
         self.region_token_num = region_token_num
@@ -98,10 +100,8 @@ class JointAttention(nn.Module):
         self.use_pool_offset = use_pool_offset
         self.dropout_attn = dropout_attn
 
-        attn_dim = num_heads * head_dim
-
-        self.pool_qkv = nn.Linear(dim, attn_dim * 3, bias=True)
-        self.x_qkv = nn.Linear(dim, attn_dim * 3, bias=True)
+        self.pool_qkv = nn.Linear(dim, self.attn_dim * 3, bias=True)
+        self.x_qkv = nn.Linear(dim, self.attn_dim * 3, bias=True)
 
         self.qk_norm = qk_norm
         if qk_norm:
@@ -109,9 +109,6 @@ class JointAttention(nn.Module):
             self.pool_k_norm = RMSNorm(head_dim)
             self.x_q_norm = RMSNorm(head_dim)
             self.x_k_norm = RMSNorm(head_dim)
-
-        self.pool_out = nn.Linear(attn_dim, dim, bias=True)
-        self.x_out = nn.Linear(attn_dim, dim, bias=True)
 
         self.pool_norm = RMSNorm(dim)
         self.x_norm = RMSNorm(dim)
@@ -125,18 +122,15 @@ class JointAttention(nn.Module):
     def _to_heads(self, x):
         return rearrange(x, 'b t (h d) -> b h t d', h=self.num_heads)
 
-    def forward(self, pool, x, regions, t_mask, n_mask, attn_mask):
-        N = n_mask.shape[1]
-        R = self.region_token_num
-        P = N * R
-        B = x.shape[0]
-        T = regions.shape[1]
+    def _flatten_heads(self, x):
+        return rearrange(x, 'b h t d -> b t (h d)')
 
-        pool_normed = self.pool_norm(pool)
-        x_normed = self.x_norm(x)
+    def _pool_token_num(self, n_mask):
+        return n_mask.shape[1] * self.region_token_num
 
-        pool_q, pool_k, pool_v = self.pool_qkv(pool_normed).chunk(3, dim=-1)
-        x_q, x_k, x_v = self.x_qkv(x_normed).chunk(3, dim=-1)
+    def _project_qkv(self, pool, x):
+        pool_q, pool_k, pool_v = self.pool_qkv(self.pool_norm(pool)).chunk(3, dim=-1)
+        x_q, x_k, x_v = self.x_qkv(self.x_norm(x)).chunk(3, dim=-1)
 
         pool_q, pool_k, pool_v = map(self._to_heads, (pool_q, pool_k, pool_v))
         x_q, x_k, x_v = map(self._to_heads, (x_q, x_k, x_v))
@@ -147,46 +141,112 @@ class JointAttention(nn.Module):
             x_q = self.x_q_norm(x_q)
             x_k = self.x_k_norm(x_k)
 
+        return pool_q, pool_k, pool_v, x_q, x_k, x_v
+
+    def _global_positions(self, size, batch_size, device):
+        return torch.arange(size, device=device).unsqueeze(0).expand(batch_size, -1).float()
+
+    def _rope_positions(self, regions, n_mask):
+        B, T = regions.shape
+        N = n_mask.shape[1]
+        R = self.region_token_num
+        P = N * R
+        device = regions.device
+
+        if self.rope_mode == 'local':
+            pool_lpos, x_lpos = compute_positions_local(regions, R, N, self.use_pool_offset)
+            return (pool_lpos.float(), x_lpos.float()), None
+        if self.rope_mode == 'global':
+            pool_gpos = self._global_positions(P, B, device)
+            x_gpos = self._global_positions(T, B, device)
+            return (pool_gpos, x_gpos), None
+        if self.rope_mode == 'mixed':
+            pool_gpos = self._global_positions(P, B, device)
+            x_gpos = self._global_positions(T, B, device)
+            pool_lpos, x_lpos = compute_positions_local(regions, R, N, self.use_pool_offset)
+            return (pool_gpos, x_gpos), (pool_lpos.float(), x_lpos.float())
+        raise ValueError(f"Unknown rope_mode: {self.rope_mode}")
+
+    def _apply_rope_pair(self, q, k, q_pos, k_pos, q_ridx=None, k_ridx=None):
+        if q_ridx is None:
+            return self.rope(q, k, q_pos, k_pos)
+        return self.rope(q, k, q_pos, k_pos, q_ridx, k_ridx)
+
+    def _attention(self, q, k, v, attn_mask):
+        out = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, dropout_p=self.dropout_attn if self.training else 0.0
+        )
+        return fill_with_attn_mask(out, attn_mask)
+
+    def _mask_outputs(self, pool, x, t_mask, n_mask):
+        B = x.shape[0]
+        P = self._pool_token_num(n_mask)
+        pool = pool * n_mask.unsqueeze(-1).expand(-1, -1, self.region_token_num).reshape(B, P, 1).float()
+        x = x * t_mask.unsqueeze(-1).float()
+        return pool, x
+
+
+class JointAttention(JointAttentionBase):
+    def __init__(
+            self, dim,
+            num_heads,
+            head_dim,
+            region_token_num=1,
+            qk_norm=True,
+            use_rope=True,
+            rope_mode='mixed',
+            use_pool_offset=False,
+            theta=10000.0,
+            dropout_attn: float = 0.0,
+            out_drop_x: float = 0.0,
+            out_drop_pool: float = 0.0,
+    ):
+        super().__init__(
+            dim=dim,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            region_token_num=region_token_num,
+            qk_norm=qk_norm,
+            use_rope=use_rope,
+            rope_mode=rope_mode,
+            use_pool_offset=use_pool_offset,
+            theta=theta,
+            dropout_attn=dropout_attn,
+            out_drop_x=out_drop_x,
+            out_drop_pool=out_drop_pool,
+        )
+        self.pool_out = nn.Linear(self.attn_dim, self.dim, bias=True)
+        self.x_out = nn.Linear(self.attn_dim, self.dim, bias=True)
+
+    def _apply_joint_rope(self, q, k, regions, n_mask):
+        if not self.use_rope:
+            return q, k
+
+        pos, ridx = self._rope_positions(regions, n_mask)
+        full_pos = torch.cat(pos, dim=-1)
+        if ridx is None:
+            return self._apply_rope_pair(q, k, full_pos, full_pos)
+
+        full_ridx = torch.cat(ridx, dim=-1)
+        return self._apply_rope_pair(q, k, full_pos, full_pos, full_ridx, full_ridx)
+
+    def forward(self, pool, x, regions, t_mask, n_mask, attn_mask):
+        P = self._pool_token_num(n_mask)
+        pool_q, pool_k, pool_v, x_q, x_k, x_v = self._project_qkv(pool, x)
         q = torch.cat([pool_q, x_q], dim=2)
         k = torch.cat([pool_k, x_k], dim=2)
         v = torch.cat([pool_v, x_v], dim=2)
+        q, k = self._apply_joint_rope(q, k, regions, n_mask)
 
-        if self.use_rope:
-            if self.rope_mode == 'local':
-                pool_pos, x_pos = compute_positions_local(regions, R, N, self.use_pool_offset)
-                full_pos = torch.cat([pool_pos.float(), x_pos.float()], dim=-1)
-                q, k = self.rope(q, k, full_pos, full_pos)
-            elif self.rope_mode == 'global':
-                pool_pos = torch.arange(P, device=regions.device).unsqueeze(0).expand(B, -1).float()
-                x_pos = torch.arange(T, device=regions.device).unsqueeze(0).expand(B, -1).float()
-                full_pos = torch.cat([pool_pos, x_pos], dim=-1)
-                q, k = self.rope(q, k, full_pos, full_pos)
-            elif self.rope_mode == 'mixed':
-                pool_seq_pos = torch.arange(P, device=regions.device).unsqueeze(0).expand(B, -1).float()
-                x_seq_pos = torch.arange(T, device=regions.device).unsqueeze(0).expand(B, -1).float()
-                q_gpos = torch.cat([pool_seq_pos, x_seq_pos], dim=-1)
-                pool_lpos, x_lpos = compute_positions_local(regions, R, N, self.use_pool_offset)
-                q_ridx = torch.cat([pool_lpos.float(), x_lpos.float()], dim=-1)
-                q, k = self.rope(q, k, q_gpos, q_gpos, q_ridx, q_ridx)
-            else:
-                raise ValueError(f"Unknown rope_mode: {self.rope_mode}")
-
-        out = F.scaled_dot_product_attention(
-            q, k, v, attn_mask=attn_mask,
-            dropout_p=self.dropout_attn if self.training else 0.0,
-        )
-        out = fill_with_attn_mask(out, attn_mask)
-
-        pool_attn = rearrange(out[:, :, :P, :], 'b h t d -> b t (h d)')
-        x_attn = rearrange(out[:, :, P:, :], 'b h t d -> b t (h d)')
+        out = self._attention(q, k, v, attn_mask)
+        pool_attn = self._flatten_heads(out[:, :, :P, :])
+        x_attn = self._flatten_heads(out[:, :, P:, :])
 
         pool_attn = self.pool_out(pool_attn)
         x_attn = self.x_out(x_attn)
         pool = self.out_drop_pool(pool_attn)
         x = self.out_drop_x(x_attn)
-
-        pool = pool * n_mask.unsqueeze(-1).expand(-1, -1, R).reshape(B, P, 1).float()
-        x = x * t_mask.unsqueeze(-1).float()
+        pool, x = self._mask_outputs(pool, x, t_mask, n_mask)
 
         return pool, x
 
@@ -245,7 +305,7 @@ def build_split_attention_masks(regions, region_token_num, t_mask, n_mask, regio
     return pp_mask, xx_mask, px_mask, xp_mask
 
 
-class SplitJointAttention(nn.Module):
+class SplitJointAttention(JointAttentionBase):
     """
     4-way split attention (drop-in replacement for JointAttention):
     - pool->pool: same-stream with RoPE
@@ -272,47 +332,39 @@ class SplitJointAttention(nn.Module):
             out_drop_x: float = 0.0,
             out_drop_pool: float = 0.0,
     ):
-        super().__init__()
-
-        self.out_drop_x = nn.Dropout(out_drop_x) if out_drop_x > 0. else nn.Identity()
-        self.out_drop_pool = nn.Dropout(out_drop_pool) if out_drop_pool > 0. else nn.Identity()
-        self.region_token_num = region_token_num
-        self.num_heads = num_heads
-        self.head_dim = head_dim
-
-        self.rope_mode = rope_mode
-        self.use_rope = use_rope
-        self.use_pool_offset = use_pool_offset
-        self.dropout_attn = dropout_attn
-
-        attn_dim = num_heads * head_dim
-
-        self.pool_qkv = nn.Linear(dim, attn_dim * 3, bias=True)
-        self.x_qkv = nn.Linear(dim, attn_dim * 3, bias=True)
-
-        self.qk_norm = qk_norm
-        if qk_norm:
-            self.pool_q_norm = RMSNorm(head_dim)
-            self.pool_k_norm = RMSNorm(head_dim)
-            self.x_q_norm = RMSNorm(head_dim)
-            self.x_k_norm = RMSNorm(head_dim)
-
-        self.pool_norm = RMSNorm(dim)
-        self.x_norm = RMSNorm(dim)
+        super().__init__(
+            dim=dim,
+            num_heads=num_heads,
+            head_dim=head_dim,
+            region_token_num=region_token_num,
+            qk_norm=qk_norm,
+            use_rope=use_rope,
+            rope_mode=rope_mode,
+            use_pool_offset=use_pool_offset,
+            theta=theta,
+            dropout_attn=dropout_attn,
+            out_drop_x=out_drop_x,
+            out_drop_pool=out_drop_pool,
+        )
 
         # Learnable merge for same-stream + cross-stream outputs
-        self.pool_merge = nn.Linear(attn_dim * 2, dim, bias=True)
-        self.x_merge = nn.Linear(attn_dim * 2, dim, bias=True)
+        self.pool_merge = nn.Linear(self.attn_dim * 2, dim, bias=True)
+        self.x_merge = nn.Linear(self.attn_dim * 2, dim, bias=True)
 
-        # RoPE for same-stream attention only
-        if use_rope:
-            if rope_mode == 'mixed':
-                self.rope = RegionRoPE(head_dim, mode='global', theta=theta)
-            else:
-                self.rope = RegionRoPE(head_dim, mode='local', theta=theta)
+    def _apply_split_rope(self, pool_q, pool_k, x_q, x_k, regions, n_mask):
+        if not self.use_rope:
+            return pool_q, pool_k, x_q, x_k
 
-    def _to_heads(self, x):
-        return rearrange(x, 'b t (h d) -> b h t d', h=self.num_heads)
+        pos, ridx = self._rope_positions(regions, n_mask)
+        pool_pos, x_pos = pos
+        if ridx is None:
+            pool_q, pool_k = self._apply_rope_pair(pool_q, pool_k, pool_pos, pool_pos)
+            x_q, x_k = self._apply_rope_pair(x_q, x_k, x_pos, x_pos)
+        else:
+            pool_ridx, x_ridx = ridx
+            pool_q, pool_k = self._apply_rope_pair(pool_q, pool_k, pool_pos, pool_pos, pool_ridx, pool_ridx)
+            x_q, x_k = self._apply_rope_pair(x_q, x_k, x_pos, x_pos, x_ridx, x_ridx)
+        return pool_q, pool_k, x_q, x_k
 
     def forward(self, pool, x, regions, t_mask, n_mask, attn_mask):
         """
@@ -321,89 +373,37 @@ class SplitJointAttention(nn.Module):
             attn_mask: optional pre-built masks tuple (pp_mask, xx_mask, px_mask, xp_mask)
                          If None, masks are built internally. Pass for efficiency when reusing masks.
         """
-        N = n_mask.shape[1]
-        R = self.region_token_num
-        P = N * R
-        B = x.shape[0]
-        T = regions.shape[1]
-        device = x.device
-        dp = self.dropout_attn if self.training else 0.0
-
         # Unwrap pre-built masks
         pp_mask, xx_mask, px_mask, xp_mask = attn_mask
 
-        # Pre-norm
-        pool_normed = self.pool_norm(pool)
-        x_normed = self.x_norm(x)
-
-        # QKV
-        pool_q, pool_k, pool_v = self.pool_qkv(pool_normed).chunk(3, dim=-1)
-        x_q, x_k, x_v = self.x_qkv(x_normed).chunk(3, dim=-1)
-
-        pool_q, pool_k, pool_v = map(self._to_heads, (pool_q, pool_k, pool_v))
-        x_q, x_k, x_v = map(self._to_heads, (x_q, x_k, x_v))
-
-        # QK Norm
-        if self.qk_norm:
-            pool_q = self.pool_q_norm(pool_q)
-            pool_k = self.pool_k_norm(pool_k)
-            x_q = self.x_q_norm(x_q)
-            x_k = self.x_k_norm(x_k)
-
-        # Apply RoPE based on mode (for all 4 attention paths)
-        if self.use_rope:
-            if self.rope_mode == 'local':
-                pool_lpos, x_lpos = compute_positions_local(regions, R, N, self.use_pool_offset)
-                pool_q_r, pool_k_r = self.rope(pool_q, pool_k, pool_lpos.float(), pool_lpos.float())
-                x_q_r, x_k_r = self.rope(x_q, x_k, x_lpos.float(), x_lpos.float())
-            elif self.rope_mode == 'global':
-                pool_pos = torch.arange(P, device=device).unsqueeze(0).expand(B, -1).float()
-                x_pos = torch.arange(T, device=device).unsqueeze(0).expand(B, -1).float()
-                pool_q_r, pool_k_r = self.rope(pool_q, pool_k, pool_pos, pool_pos)
-                x_q_r, x_k_r = self.rope(x_q, x_k, x_pos, x_pos)
-            elif self.rope_mode == 'mixed':
-                pool_gpos = torch.arange(P, device=device).unsqueeze(0).expand(B, -1).float()
-                x_gpos = torch.arange(T, device=device).unsqueeze(0).expand(B, -1).float()
-                pool_lpos, x_lpos = compute_positions_local(regions, R, N, self.use_pool_offset)
-                pool_q_r, pool_k_r = self.rope(pool_q, pool_k, pool_gpos, pool_gpos, pool_lpos.float(),
-                                               pool_lpos.float())
-                x_q_r, x_k_r = self.rope(x_q, x_k, x_gpos, x_gpos, x_lpos.float(), x_lpos.float())
-            else:
-                raise ValueError(f"Unknown rope_mode: {self.rope_mode}")
-        else:
-            pool_q_r, pool_k_r = pool_q, pool_k
-            x_q_r, x_k_r = x_q, x_k
+        pool_q, pool_k, pool_v, x_q, x_k, x_v = self._project_qkv(pool, x)
+        pool_q_r, pool_k_r, x_q_r, x_k_r = self._apply_split_rope(
+            pool_q, pool_k, x_q, x_k, regions, n_mask
+        )
 
         # --- 1. pool -> pool (same-stream with RoPE) ---
-        pp_out = F.scaled_dot_product_attention(pool_q_r, pool_k_r, pool_v, attn_mask=pp_mask, dropout_p=dp)
-        pp_out = fill_with_attn_mask(pp_out, pp_mask)
+        pp_out = self._attention(pool_q_r, pool_k_r, pool_v, pp_mask)
 
         # --- 2. x -> x (same-stream with RoPE) ---
-        xx_out = F.scaled_dot_product_attention(x_q_r, x_k_r, x_v, attn_mask=xx_mask, dropout_p=dp)
-        xx_out = fill_with_attn_mask(xx_out, xx_mask)
+        xx_out = self._attention(x_q_r, x_k_r, x_v, xx_mask)
 
-        # --- 3. pool -> x (cross-stream, NO RoPE, use mask only) ---
-        px_out = F.scaled_dot_product_attention(pool_q_r, x_k_r, x_v, attn_mask=px_mask, dropout_p=dp)
-        px_out = fill_with_attn_mask(px_out, px_mask)
+        # --- 3. pool -> x (cross-stream with RoPE + mask) ---
+        px_out = self._attention(pool_q_r, x_k_r, x_v, px_mask)
 
-        # --- 4. x -> pool (cross-stream, NO RoPE, use mask only) ---
-        xp_out = F.scaled_dot_product_attention(x_q_r, pool_k_r, pool_v, attn_mask=xp_mask, dropout_p=dp)
-        xp_out = fill_with_attn_mask(xp_out, xp_mask)
+        # --- 4. x -> pool (cross-stream with RoPE + mask) ---
+        xp_out = self._attention(x_q_r, pool_k_r, pool_v, xp_mask)
 
         # Combine: learnable merge of same-stream + cross-stream
-        pp_flat = rearrange(pp_out, 'b h t d -> b t (h d)')
-        px_flat = rearrange(px_out, 'b h t d -> b t (h d)')
-        xx_flat = rearrange(xx_out, 'b h t d -> b t (h d)')
-        xp_flat = rearrange(xp_out, 'b h t d -> b t (h d)')
+        pp_flat = self._flatten_heads(pp_out)
+        px_flat = self._flatten_heads(px_out)
+        xx_flat = self._flatten_heads(xx_out)
+        xp_flat = self._flatten_heads(xp_out)
 
         pool_attn = self.pool_merge(torch.cat([pp_flat, px_flat], dim=-1))
         x_attn = self.x_merge(torch.cat([xx_flat, xp_flat], dim=-1))
 
         pool = self.out_drop_pool(pool_attn)
         x = self.out_drop_x(x_attn)
-
-        # Mask output
-        pool = pool * n_mask.unsqueeze(-1).expand(-1, -1, R).reshape(B, P, 1).float()
-        x = x * t_mask.unsqueeze(-1).float()
+        pool, x = self._mask_outputs(pool, x, t_mask, n_mask)
 
         return pool, x
