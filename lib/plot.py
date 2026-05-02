@@ -6,7 +6,7 @@ from matplotlib.ticker import MultipleLocator
 
 def spectrogram_to_figure(spectrogram, title=None):
     fig = plt.figure(figsize=(12, 3))
-    plt.pcolor(spectrogram.T, vmin=-14, vmax=4)
+    plt.pcolormesh(spectrogram.T, vmin=-14, vmax=4)
     if title is not None:
         plt.title(title, fontsize=15)
     plt.tight_layout()
@@ -16,7 +16,7 @@ def spectrogram_to_figure(spectrogram, title=None):
 def similarity_to_figure(similarities, durations, title=None):
     dur_cumsum = np.cumsum(durations)
     fig = plt.figure(figsize=(9, 9))
-    plt.pcolor(similarities, vmin=-1, vmax=1)
+    plt.pcolormesh(similarities, vmin=-1, vmax=1)
     for i in range(durations.shape[0]):
         rect = matplotlib.patches.Rectangle(
             xy=(dur_cumsum[i] - durations[i], dur_cumsum[i] - durations[i]),
@@ -88,7 +88,7 @@ def probs_to_figure(
 ):
     fig = plt.figure(figsize=(12, 6))
     probs_concat = np.concatenate([np.abs(probs_pred - probs_gt), probs_gt, probs_pred], axis=1)
-    plt.pcolor(probs_concat.T, vmin=0, vmax=1)
+    plt.pcolormesh(probs_concat.T, vmin=0, vmax=1)
     T, C = probs_gt.shape
     plt.yticks([2.5 * C, 1.5 * C, 0.5 * C], ["pred", "gt", "diff"])
     plt.hlines([C, 2 * C], xmin=0, xmax=T, color="white", linewidth=1.5)
