@@ -351,8 +351,8 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
         save_obj = {}
         with torch.autocast(self.device.type, enabled=False):
             losses = self.forward_model(sample, infer=False)
+            outputs = self.forward_model(sample, infer=True)
             if min(sample["indices"]) < self.training_config.validation.max_plots:
-                outputs = self.forward_model(sample, infer=True)
                 sample.pop("names", None)
                 save_obj["sample"] = sample
                 save_obj["outputs"] = outputs
