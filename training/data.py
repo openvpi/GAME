@@ -9,7 +9,11 @@ import torch
 from lib.config.schema import AugmentationConfig
 from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDataset
-from .augmentation import *
+from .augmentation import (
+    AugmentationArgs, WaveformAugmentationContext, SpectrogramAugmentationContext,
+    generate_seed, generate_augmentation_args,
+    build_wav_transforms, build_spec_transforms,
+)
 
 __all__ = [
     "collate_nd",
@@ -42,7 +46,7 @@ class BaseDataset(torch.utils.data.Dataset):
             prefix: str,
             augmentation_config: AugmentationConfig = None,
             augmentation_deterministic: bool = False,
-            augmentation_skip_transforms: bool = False,
+            augmentation_destructive_only: bool = False,
             augmentation_return_dirty: bool = False,
     ):
         super().__init__()
@@ -55,9 +59,12 @@ class BaseDataset(torch.utils.data.Dataset):
         self.epoch = torch.multiprocessing.Value("i", 0)
         self.augmentation_config = augmentation_config
         self.augmentation_deterministic = augmentation_deterministic
-        self.augmentation_skip_transforms = augmentation_skip_transforms
+        self.augmentation_destructive_only = augmentation_destructive_only
         self.augmentation_return_dirty = augmentation_return_dirty
         self.augmentation_args_map: dict[int, AugmentationArgs] = {}
+        self.wav_transforms = None
+        self.mel_spectrogram = None
+        self.spec_transforms = None
         self.setup = False
 
     def __getitem__(self, index):
@@ -73,7 +80,7 @@ class BaseDataset(torch.utils.data.Dataset):
                 # Must be indeterministic if augmentation args are not pre-generated
                 augmentation_args = generate_augmentation_args(
                     self.augmentation_config,
-                    skip_transforms=self.augmentation_skip_transforms,
+                    destructive_only=self.augmentation_destructive_only,
                 )
             # Apply augmentations to spectrogram
             spectrogram = self._get_augmented_spectrogram(index, spectrogram, augmentation_args)
@@ -114,6 +121,11 @@ class BaseDataset(torch.utils.data.Dataset):
             fmax=self.augmentation_config.features.spectrogram.fmax,
             clip_val=1e-9,
         ).eval()
+        self.wav_transforms = build_wav_transforms(self.augmentation_config)
+        self.spec_transforms = build_spec_transforms(
+            self.augmentation_config,
+            destructive_only=self.augmentation_destructive_only,
+        )
         if self.augmentation_deterministic:
             # Pre-generate augmentation args for each sample
             seed = generate_seed(sorted(self.info.keys()))
@@ -121,7 +133,7 @@ class BaseDataset(torch.utils.data.Dataset):
             for index in range(len(self)):
                 self.augmentation_args_map[index] = generate_augmentation_args(
                     self.augmentation_config, generator=generator,
-                    skip_transforms=self.augmentation_skip_transforms,
+                    destructive_only=self.augmentation_destructive_only,
                 )
 
     def _get_waveform(self, index):
@@ -133,69 +145,55 @@ class BaseDataset(torch.utils.data.Dataset):
         return waveform
 
     def _get_augmented_spectrogram(self, index, spectrogram: torch.Tensor, args: AugmentationArgs) -> torch.Tensor:
-        waveform = None
-        # RIR reverb (wav -> wav)
-        if args.rir_kernel_path is not None:
-            if waveform is None:
-                waveform = self._get_waveform(index)
-            waveform = rir_reverb(
-                waveform,
+        # Lazily load waveform only when a waveform-domain or wav->mel transform is active
+        waveform_needed = any([
+            args.rir_kernel_path is not None,
+            args.colored_noise_exponent is not None,
+            args.natural_noise_args is not None,
+            args.pitch_shift is not None,
+        ])
+        if waveform_needed:
+            waveform = self._get_waveform(index)
+        else:
+            waveform = None
+
+        # Stage 1: wav -> wav
+        if waveform is not None and len(self.wav_transforms.transforms) > 0:
+            ctx = WaveformAugmentationContext(
+                waveform=waveform,
                 sr=self.augmentation_config.features.audio_sample_rate,
-                kernel_path=args.rir_kernel_path,
+                args=args,
+                deterministic=self.augmentation_deterministic,
+                index=index,
             )
-        # Colored noise (wav -> wav)
-        if args.colored_noise_exponent is not None:
-            if waveform is None:
-                waveform = self._get_waveform(index)
-            waveform = colored_noise(
-                waveform,
-                exponent=args.colored_noise_exponent,
-                factor=args.colored_noise_factor,
-                seed=index if self.augmentation_deterministic else None,
+            self.wav_transforms(ctx)
+            waveform = ctx.waveform
+
+        # Stage 2: wav -> mel
+        if waveform is not None:
+            waveform_tensor = torch.from_numpy(waveform).unsqueeze(0)
+            if (
+                    self.augmentation_config.pitch_shifting.enabled
+                    and not self.augmentation_destructive_only
+                    and args.pitch_shift is not None
+            ):
+                spectrogram = self.mel_spectrogram(
+                    waveform_tensor, key_shift=args.pitch_shift,
+                ).squeeze(0).T
+            else:
+                spectrogram = self.mel_spectrogram(waveform_tensor).squeeze(0).T
+
+        # Stage 3: mel -> mel
+        if len(self.spec_transforms.transforms) > 0:
+            ctx = SpectrogramAugmentationContext(
+                spectrogram=spectrogram,
+                args=args,
+                deterministic=self.augmentation_deterministic,
+                index=index,
             )
-        # Natural noise (wav -> wav)
-        if args.natural_noise_args is not None:
-            if waveform is None:
-                waveform = self._get_waveform(index)
-            waveform = natural_noise(
-                waveform,
-                sr=self.augmentation_config.features.audio_sample_rate,
-                args_list=args.natural_noise_args,
-                db=args.natural_noise_db,
-            )
-        # Pitch shifting (wav -> mel)
-        if args.pitch_shift is not None:
-            if waveform is None:
-                waveform = self._get_waveform(index)
-            spectrogram = pitch_shifting(
-                waveform,
-                self.mel_spectrogram,
-                shift=args.pitch_shift,
-            )
-        elif waveform is not None:
-            # Recompute spectrogram if waveform was modified by augmentations above
-            spectrogram = self.mel_spectrogram(
-                torch.from_numpy(waveform).unsqueeze(0)
-            ).squeeze(0).T
-        # Loudness scaling (mel -> mel)
-        if args.loudness_scale is not None:
-            spectrogram = loudness_scaling(
-                spectrogram, scale=args.loudness_scale
-            )
-        # Spectrogram masking (mel -> mel)
-        if args.time_mask_width is not None or args.freq_mask_width is not None:
-            spectrogram = spectrogram_masking(
-                spectrogram,
-                time_mask_offset=args.time_mask_offset,
-                time_mask_width=args.time_mask_width,
-                time_mask_std=args.time_mask_std,
-                freq_mask_offset=args.freq_mask_offset,
-                freq_mask_width=args.freq_mask_width,
-                freq_mask_mean=args.freq_mask_mean,
-                freq_mask_std=args.freq_mask_std,
-                intersect=args.spec_mask_intersect,
-                seed=index if self.augmentation_deterministic else None,
-            )
+            self.spec_transforms(ctx)
+            spectrogram = ctx.spectrogram
+
         return spectrogram
 
     @classmethod

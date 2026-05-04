@@ -217,7 +217,7 @@ class BaseLightningModule(lightning.pytorch.LightningModule, abc.ABC):
                 self.data_dir, "valid",
                 augmentation_config=self.training_config.augmentation,
                 augmentation_deterministic=True,
-                augmentation_skip_transforms=True,
+                augmentation_destructive_only=True,
                 augmentation_return_dirty=True,
             )
         else:

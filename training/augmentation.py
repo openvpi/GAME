@@ -1,3 +1,4 @@
+import abc
 import hashlib
 import math
 from dataclasses import dataclass
@@ -10,18 +11,22 @@ import torch
 from torch import Tensor
 
 from lib.config.schema import AugmentationConfig
-from lib.feature.mel import StretchableMelSpectrogram
 
 __all__ = [
     "AugmentationArgs",
     "generate_seed",
     "generate_augmentation_args",
-    "colored_noise",
-    "natural_noise",
-    "rir_reverb",
-    "pitch_shifting",
-    "loudness_scaling",
-    "spectrogram_masking",
+    "Augmentation",
+    "Compose",
+    "ColoredNoise",
+    "NaturalNoise",
+    "RIRReverb",
+    "LoudnessScaling",
+    "SpectrogramMasking",
+    "WaveformAugmentationContext",
+    "SpectrogramAugmentationContext",
+    "build_wav_transforms",
+    "build_spec_transforms",
 ]
 
 
@@ -52,6 +57,23 @@ class AugmentationArgs:
     spec_mask_intersect: bool = None
 
 
+@dataclass
+class WaveformAugmentationContext:
+    waveform: np.ndarray
+    sr: int
+    args: AugmentationArgs
+    deterministic: bool
+    index: int
+
+
+@dataclass
+class SpectrogramAugmentationContext:
+    spectrogram: Tensor
+    args: AugmentationArgs
+    deterministic: bool
+    index: int
+
+
 def generate_seed(strings: list[str]) -> int:
     text = "|".join(strings)
     hash_obj = hashlib.sha256(text.encode("utf8"))
@@ -61,7 +83,7 @@ def generate_seed(strings: list[str]) -> int:
 
 def generate_augmentation_args(
         config: AugmentationConfig, generator: np.random.Generator = None,
-        skip_transforms: bool = False
+        destructive_only: bool = False,
 ) -> AugmentationArgs:
     if generator is None:
         generator = np.random.default_rng()
@@ -79,8 +101,8 @@ def generate_augmentation_args(
         args.colored_noise_factor = generator.uniform(-6, -1)
 
     if (
-        config.natural_noise.enabled
-        and generator.random() < config.natural_noise.prob
+            config.natural_noise.enabled
+            and generator.random() < config.natural_noise.prob
     ):
         natural_noise_args_list = []
         repeats = generator.integers(1, config.natural_noise.max_repeats + 1)
@@ -88,7 +110,7 @@ def generate_augmentation_args(
             noise_path = generator.choice(config.natural_noise.noise_file_list)
             noise_zoom = 2 ** generator.uniform(-1, 1)
             noise_offset = generator.uniform(0, 1)
-            noise_scale = (10 ** (generator.uniform(-12, 12) / 20))
+            noise_scale = 10 ** (generator.uniform(-12, 12) / 20)
             noise_args = _NaturalNoiseArgs(
                 path=noise_path,
                 zoom=noise_zoom,
@@ -100,13 +122,13 @@ def generate_augmentation_args(
         args.natural_noise_db = generator.uniform(-24, -6)
 
     if (
-        config.rir_reverb.enabled
-        and generator.random() < config.rir_reverb.prob
+            config.rir_reverb.enabled
+            and generator.random() < config.rir_reverb.prob
     ):
         args.rir_kernel_path = generator.choice(config.rir_reverb.kernel_file_list)
 
     if (
-            not skip_transforms
+            not destructive_only
             and config.pitch_shifting.enabled
             and generator.random() < config.pitch_shifting.prob
     ):
@@ -116,7 +138,7 @@ def generate_augmentation_args(
         )
 
     if (
-            not skip_transforms
+            not destructive_only
             and config.loudness_scaling.enabled
             and generator.random() < config.loudness_scaling.prob
     ):
@@ -151,137 +173,180 @@ def generate_augmentation_args(
     return args
 
 
-def colored_noise(
-        waveform: np.ndarray,
-        exponent: float,
-        factor: float,
-        seed: int = None,
-):
-    """
-    wav -> wav
-    """
-    generator = np.random.default_rng(seed)
-    # noinspection PyUnresolvedReferences
-    noise = colorednoise.powerlaw_psd_gaussian(
-        exponent, size=len(waveform), random_state=generator
-    ).astype(np.float32)
-    return waveform + noise * (10 ** factor)
+# ---------------------------------------------------------------------------
+# Base classes
+# ---------------------------------------------------------------------------
+
+class Augmentation(abc.ABC):
+    """Base class for a single augmentation step."""
+
+    @abc.abstractmethod
+    def should_apply(self, ctx) -> bool: ...
+
+    @abc.abstractmethod
+    def apply(self, ctx) -> None: ...
+
+    def __call__(self, ctx):
+        if self.should_apply(ctx):
+            self.apply(ctx)
+        return ctx
 
 
-def natural_noise(
-        waveform: np.ndarray,
-        sr: int,
-        args_list: list[_NaturalNoiseArgs],
-        db: float,
-):
-    total_noise = np.zeros_like(waveform)
-    for args in args_list:
-        reinterpreted_sr = round(sr * args.zoom)
-        noise, _ = librosa.load(args.path, sr=reinterpreted_sr, mono=True)
-        min_offset = -len(noise)
-        max_offset = len(waveform)
-        offset = int(args.offset * (max_offset - min_offset) + min_offset)
-        if offset < 0:
-            noise = noise[-offset:]
-        elif offset > 0:
-            noise = np.pad(noise, (offset, 0), mode="constant")
-        if len(noise) < len(waveform):
-            noise = np.pad(noise, (0, len(waveform) - len(noise)), mode="constant")
-        elif len(noise) > len(waveform):
-            noise = noise[:len(waveform)]
-        noise = noise * args.scale
-        total_noise += noise
-    scale = np.abs(waveform).max() / (np.abs(total_noise).max() + 1e-8)
-    waveform_noisy = waveform + total_noise * scale * (10 ** (db / 20))
-    return waveform_noisy.astype(np.float32)
+class Compose:
+    """Runs a sequence of augmentations in order."""
+
+    def __init__(self, transforms: list[Augmentation]):
+        self.transforms = transforms
+
+    def __call__(self, ctx):
+        for t in self.transforms:
+            t(ctx)
+        return ctx
 
 
-def rir_reverb(
-        waveform: np.ndarray,
-        sr: int,
-        kernel_path: str,
-):
-    """
-    wav -> wav
-    """
-    rir, _ = librosa.load(kernel_path, sr=sr, mono=True)
-    convolved = scipy.signal.fftconvolve(waveform, rir, mode="full").astype(np.float32)
-    rir_max = np.abs(rir).argmax()
-    convolved = convolved[rir_max: rir_max + len(waveform)]
-    scale = np.abs(waveform).max() / (np.abs(convolved).max() + 1e-8)
-    convolved = convolved * scale
-    return convolved.astype(np.float32)
+# ---------------------------------------------------------------------------
+# Waveform-domain transforms (wav -> wav)
+# ---------------------------------------------------------------------------
+
+class ColoredNoise(Augmentation):
+    def should_apply(self, ctx: WaveformAugmentationContext) -> bool:
+        return ctx.args.colored_noise_exponent is not None
+
+    def apply(self, ctx: WaveformAugmentationContext) -> None:
+        seed = ctx.index if ctx.deterministic else None
+        generator = np.random.default_rng(seed)
+        noise = colorednoise.powerlaw_psd_gaussian(
+            ctx.args.colored_noise_exponent,
+            size=len(ctx.waveform),
+            random_state=generator,
+        ).astype(np.float32)
+        ctx.waveform = ctx.waveform + noise * (10 ** ctx.args.colored_noise_factor)
 
 
-def pitch_shifting(
-        waveform: np.ndarray,
-        mel_spec_module: StretchableMelSpectrogram,
-        shift: float,
-) -> Tensor:
-    """
-    wav -> mel
-    """
-    shifted_spectrogram = mel_spec_module(
-        torch.from_numpy(waveform).unsqueeze(0), key_shift=shift
-    ).squeeze(0).T
-    return shifted_spectrogram
+class NaturalNoise(Augmentation):
+    def should_apply(self, ctx: WaveformAugmentationContext) -> bool:
+        return ctx.args.natural_noise_args is not None
+
+    def apply(self, ctx: WaveformAugmentationContext) -> None:
+        total_noise = np.zeros_like(ctx.waveform)
+        for noise_args in ctx.args.natural_noise_args:
+            reinterpreted_sr = round(ctx.sr * noise_args.zoom)
+            noise, _ = librosa.load(noise_args.path, sr=reinterpreted_sr, mono=True)
+            min_offset = -len(noise)
+            max_offset = len(ctx.waveform)
+            offset = int(noise_args.offset * (max_offset - min_offset) + min_offset)
+            if offset < 0:
+                noise = noise[-offset:]
+            elif offset > 0:
+                noise = np.pad(noise, (offset, 0), mode="constant")
+            if len(noise) < len(ctx.waveform):
+                noise = np.pad(noise, (0, len(ctx.waveform) - len(noise)), mode="constant")
+            elif len(noise) > len(ctx.waveform):
+                noise = noise[:len(ctx.waveform)]
+            noise = noise * noise_args.scale
+            total_noise += noise
+        scale = np.abs(ctx.waveform).max() / (np.abs(total_noise).max() + 1e-8)
+        ctx.waveform = (
+            ctx.waveform + total_noise * scale * (10 ** (ctx.args.natural_noise_db / 20))
+        ).astype(np.float32)
 
 
-def loudness_scaling(
-        spectrogram: Tensor,
-        scale: float
-) -> Tensor:
-    """
-    mel -> mel
-    """
-    return spectrogram + (scale / 20.0) * math.log(10)
+class RIRReverb(Augmentation):
+    def should_apply(self, ctx: WaveformAugmentationContext) -> bool:
+        return ctx.args.rir_kernel_path is not None
+
+    def apply(self, ctx: WaveformAugmentationContext) -> None:
+        rir, _ = librosa.load(ctx.args.rir_kernel_path, sr=ctx.sr, mono=True)
+        convolved = scipy.signal.fftconvolve(
+            ctx.waveform, rir, mode="full"
+        ).astype(np.float32)
+        rir_max = np.abs(rir).argmax()
+        convolved = convolved[rir_max: rir_max + len(ctx.waveform)]
+        scale = np.abs(ctx.waveform).max() / (np.abs(convolved).max() + 1e-8)
+        ctx.waveform = (convolved * scale).astype(np.float32)
 
 
-def spectrogram_masking(
-        spectrogram: Tensor,
-        time_mask_offset: float,
-        time_mask_width: int,
-        time_mask_std: float,
-        freq_mask_offset: int,
-        freq_mask_width: int,
-        freq_mask_mean: float,
-        freq_mask_std: float,
-        intersect: bool,
-        seed: int = None,
-):
-    """
-    mel -> mel
-    """
-    generator = np.random.default_rng(seed)
-    T, C = spectrogram.shape
-    spec = spectrogram.cpu().numpy()
-    time_masked = time_mask_width is not None
-    freq_masked = freq_mask_width is not None
-    if time_masked:
-        time_mask_width = min(time_mask_width, T)
-        time_offset_min = 0
-        time_offset_max = T - time_mask_width
-        time_mask_start = int(time_mask_offset * (time_offset_max - time_offset_min) + time_offset_min)
-        time_mask_end = time_mask_start + time_mask_width
-    else:
-        time_mask_start = time_mask_end = None
-    if freq_masked:
-        freq_mask_start = freq_mask_offset
-        freq_mask_end = freq_mask_offset + freq_mask_width
-    else:
-        freq_mask_start = freq_mask_end = None
-    if time_masked and freq_masked and intersect:
-        spec[time_mask_start: time_mask_end, freq_mask_start: freq_mask_end] = generator.standard_normal(
-            size=(time_mask_width, freq_mask_width), dtype=np.float32
-        ) * freq_mask_std + freq_mask_mean
-    else:
+# ---------------------------------------------------------------------------
+# Spectrogram-domain transforms (mel -> mel)
+# ---------------------------------------------------------------------------
+
+class LoudnessScaling(Augmentation):
+    def should_apply(self, ctx: SpectrogramAugmentationContext) -> bool:
+        return ctx.args.loudness_scale is not None
+
+    def apply(self, ctx: SpectrogramAugmentationContext) -> None:
+        ctx.spectrogram = ctx.spectrogram + (ctx.args.loudness_scale / 20.0) * math.log(10)
+
+
+class SpectrogramMasking(Augmentation):
+    def should_apply(self, ctx: SpectrogramAugmentationContext) -> bool:
+        return ctx.args.time_mask_width is not None or ctx.args.freq_mask_width is not None
+
+    def apply(self, ctx: SpectrogramAugmentationContext) -> None:
+        args = ctx.args
+        seed = ctx.index if ctx.deterministic else None
+        generator = np.random.default_rng(seed)
+        T, C = ctx.spectrogram.shape
+        spec = ctx.spectrogram.cpu().numpy()
+        time_masked = args.time_mask_width is not None
+        freq_masked = args.freq_mask_width is not None
         if time_masked:
-            spec[time_mask_start: time_mask_end, :] = generator.standard_normal(
-                size=(time_mask_width, C), dtype=np.float32
-            ) * time_mask_std
+            time_mask_width = min(args.time_mask_width, T)
+            time_offset_max = T - time_mask_width
+            time_mask_start = int(args.time_mask_offset * time_offset_max)
+            time_mask_end = time_mask_start + time_mask_width
+        else:
+            time_mask_start = time_mask_end = None
+            time_mask_width = None
         if freq_masked:
-            spec[:, freq_mask_start: freq_mask_end] = generator.standard_normal(
-                size=(T, freq_mask_width), dtype=np.float32
-            ) * freq_mask_std + freq_mask_mean
-    masked_spectrogram = torch.from_numpy(spec).to(spectrogram.device)
-    return masked_spectrogram
+            freq_mask_start = args.freq_mask_offset
+            freq_mask_end = args.freq_mask_offset + args.freq_mask_width
+        else:
+            freq_mask_start = freq_mask_end = None
+        if time_masked and freq_masked and args.spec_mask_intersect:
+            spec[time_mask_start:time_mask_end, freq_mask_start:freq_mask_end] = (
+                generator.standard_normal(
+                    size=(time_mask_width, args.freq_mask_width), dtype=np.float32
+                ) * args.freq_mask_std + args.freq_mask_mean
+            )
+        else:
+            if time_masked:
+                spec[time_mask_start:time_mask_end, :] = (
+                    generator.standard_normal(
+                        size=(time_mask_width, C), dtype=np.float32
+                    ) * args.time_mask_std
+                )
+            if freq_masked:
+                spec[:, freq_mask_start:freq_mask_end] = (
+                    generator.standard_normal(
+                        size=(T, args.freq_mask_width), dtype=np.float32
+                    ) * args.freq_mask_std + args.freq_mask_mean
+                )
+        ctx.spectrogram = torch.from_numpy(spec).to(ctx.spectrogram.device)
+
+
+# ---------------------------------------------------------------------------
+# Chain construction
+# ---------------------------------------------------------------------------
+
+def build_wav_transforms(config: AugmentationConfig) -> Compose:
+    transforms = []
+    if config.rir_reverb.enabled:
+        transforms.append(RIRReverb())
+    if config.colored_noise.enabled:
+        transforms.append(ColoredNoise())
+    if config.natural_noise.enabled:
+        transforms.append(NaturalNoise())
+    return Compose(transforms)
+
+
+def build_spec_transforms(
+        config: AugmentationConfig,
+        destructive_only: bool = False,
+) -> Compose:
+    transforms = []
+    if not destructive_only and config.loudness_scaling.enabled:
+        transforms.append(LoudnessScaling())
+    if config.spectrogram_masking.enabled:
+        transforms.append(SpectrogramMasking())
+    return Compose(transforms)
