@@ -108,8 +108,10 @@ class Exporter:
         self.dur2bd_path = self.save_dir / "dur2bd.onnx"
         self.bd2dur_path = self.save_dir / "bd2dur.onnx"
 
-    def _export(self, model, args, save_path, input_names, output_names,
-                 dynamic_axes=None, dynamic_shapes=None, kwargs=None):
+    def _export(
+        self, model, args, save_path, input_names, output_names,
+        dynamic_axes=None, dynamic_shapes=None, kwargs=None,
+    ):
         if self.dynamo:
             program = torch.onnx.export(
                 model, args, None,

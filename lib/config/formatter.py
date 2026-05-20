@@ -133,8 +133,10 @@ def _add_entry(fmt: _Fmt, key: Optional[str], value: Any):
         fmt.cur_width += width
 
 
-def format_model(model: BaseModel, line_width: int = 80, indent: int = 4,
-                 connector: str = ": ", separator: str = ", ") -> str:
+def format_model(
+    model: BaseModel, line_width: int = 80, indent: int = 4,
+    connector: str = ": ", separator: str = ", ",
+) -> str:
     """Format a Pydantic model as a readable string."""
     fmt = _Fmt(line_width=line_width, indent=indent, connector=connector, separator=separator)
     _add_entry(fmt, None, model)
