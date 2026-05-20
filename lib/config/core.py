@@ -73,12 +73,8 @@ class ConfigBaseModel(BaseModel):
                     delattr(self, name)
         return self
 
-    def _resolve_recursive(self, current: "ConfigBaseModel", context: ConfigOperationContext):
-        """
-        Recursively resolve all dynamic expressions in the config.
-        :param current: The current model instance.
-        :param context: The context for resolving dynamic expressions.
-        """
+    def _walk_config_fields(self, current: "ConfigBaseModel", context: ConfigOperationContext,
+                            leaf_fn):
         for field_name, field_info in type(current).model_fields.items():
             field_scope = current.__field_scopes__.get(field_name)
             if field_scope is not None and not field_scope & context.scope:
@@ -86,48 +82,34 @@ class ConfigBaseModel(BaseModel):
             context.current_path.append(field_name)
             value = getattr(current, field_name)
             if isinstance(value, ConfigBaseModel):
-                self._resolve_recursive(value, context)
+                self._walk_config_fields(value, context, leaf_fn)
             elif isinstance(value, list):
                 for i, item in enumerate(value):
                     context.current_path.append(i)
                     if isinstance(item, ConfigBaseModel):
-                        self._resolve_recursive(item, context)
+                        self._walk_config_fields(item, context, leaf_fn)
                     context.current_path.pop()
             if field_info.json_schema_extra is not None:
-                expr = field_info.json_schema_extra.get('dynamic_expr')
-                if expr:
-                    if isinstance(expr, ConfigOperationBase):
-                        context.current_value = value
-                        expr = expr.resolve(context)
-                    setattr(current, field_name, expr)
+                leaf_fn(current, field_name, field_info, value, context)
             context.current_path.pop()
 
-    def _check_recursive(self, current: "ConfigBaseModel", context: ConfigOperationContext):
-        """
-        Recursively check all dynamic expressions in the config.
-        :param current: The current model instance.
-        :param context: The context for checking dynamic expressions.
-        """
-        for field_name, field_info in type(current).model_fields.items():
-            field_scope = current.__field_scopes__.get(field_name)
-            if field_scope is not None and not field_scope & context.scope:
-                continue
-            context.current_path.append(field_name)
-            value = getattr(current, field_name)
-            if isinstance(value, ConfigBaseModel):
-                self._check_recursive(value, context)
-            elif isinstance(value, list):
-                for i, item in enumerate(value):
-                    context.current_path.append(i)
-                    if isinstance(item, ConfigBaseModel):
-                        self._check_recursive(item, context)
-                    context.current_path.pop()
-            if field_info.json_schema_extra is not None:
-                check = field_info.json_schema_extra.get('dynamic_check')
-                if check:
+    def _resolve_recursive(self, current: "ConfigBaseModel", context: ConfigOperationContext):
+        def _resolve_leaf(current, field_name, field_info, value, context):
+            expr = field_info.json_schema_extra.get('dynamic_expr')
+            if expr:
+                if isinstance(expr, ConfigOperationBase):
                     context.current_value = value
-                    check.run(context)
-            context.current_path.pop()
+                    expr = expr.resolve(context)
+                setattr(current, field_name, expr)
+        self._walk_config_fields(current, context, _resolve_leaf)
+
+    def _check_recursive(self, current: "ConfigBaseModel", context: ConfigOperationContext):
+        def _check_leaf(current, field_name, field_info, value, context):
+            check = field_info.json_schema_extra.get('dynamic_check')
+            if check:
+                context.current_value = value
+                check.run(context)
+        self._walk_config_fields(current, context, _check_leaf)
 
     def _process_nested(self, f, scope: int = 0, path: str = None):
         """
