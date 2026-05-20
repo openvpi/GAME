@@ -64,7 +64,7 @@ class _PartAggregatingCallback(lightning.pytorch.callbacks.Callback, abc.ABC):
             pl_module: lightning.pytorch.LightningModule,
             outputs: dict[str, torch.Tensor],
             batch: dict[str, Any],
-            *args, **kwargs
+            *args, **kwargs,
     ) -> None:
         for i in range(batch["size"]):
             key = self._get_key(batch, i)
@@ -77,7 +77,7 @@ class _PartAggregatingCallback(lightning.pytorch.callbacks.Callback, abc.ABC):
                 self._flush_key(key, logger_fn=trainer.progress_bar_callback.print)
 
     def on_predict_epoch_end(
-            self, trainer: lightning.pytorch.Trainer, *args, **kwargs
+            self, trainer: lightning.pytorch.Trainer, *args, **kwargs,
     ) -> None:
         for key in list(self._counters):
             self._flush_key(key, logger_fn=trainer.progress_bar_callback.print)
@@ -293,11 +293,13 @@ class UpdateDiffSingerTranscriptionsCallback(_PartAggregatingCallback):
         item = self.index_map[key][name]
         if self.use_wb:
             if self.uv_note_cond == "follow":
+                # When "follow", defer v/uv to align_notes_to_words; use raw pitch for all notes.
                 note_seq = [
                     librosa.midi_to_note(midi, unicode=False, cents=True)
                     for midi in note_midi
                 ]
             else:  # "predict"
+                # When "predict", apply presence-based "rest" now so alignment preserves them.
                 note_seq = [
                     librosa.midi_to_note(midi, unicode=False, cents=True) if vuv else "rest"
                     for midi, vuv in zip(note_midi, note_vuv)
@@ -322,6 +324,7 @@ class UpdateDiffSingerTranscriptionsCallback(_PartAggregatingCallback):
                 apply_word_uv=(self.uv_note_cond == "follow"),
             )
         else:
+            # No alignment: apply presence-based "rest" directly from model output.
             note_seq = [
                 librosa.midi_to_note(score, unicode=False, cents=True) if pres else "rest"
                 for score, pres in zip(note_midi, note_vuv)

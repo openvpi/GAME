@@ -73,8 +73,10 @@ class ConfigBaseModel(BaseModel):
                     delattr(self, name)
         return self
 
-    def _walk_config_fields(self, current: "ConfigBaseModel", context: ConfigOperationContext,
-                            leaf_fn):
+    def _walk_config_fields(
+            self, current: "ConfigBaseModel", context: ConfigOperationContext,
+            leaf_fn,
+    ):
         for field_name, field_info in type(current).model_fields.items():
             field_scope = current.__field_scopes__.get(field_name)
             if field_scope is not None and not field_scope & context.scope:
@@ -94,6 +96,8 @@ class ConfigBaseModel(BaseModel):
             context.current_path.pop()
 
     def _resolve_recursive(self, current: "ConfigBaseModel", context: ConfigOperationContext):
+        """Recursively resolve all dynamic expressions in the config."""
+
         def _resolve_leaf(current, field_name, field_info, value, context):
             expr = field_info.json_schema_extra.get('dynamic_expr')
             if expr:
@@ -101,14 +105,18 @@ class ConfigBaseModel(BaseModel):
                     context.current_value = value
                     expr = expr.resolve(context)
                 setattr(current, field_name, expr)
+
         self._walk_config_fields(current, context, _resolve_leaf)
 
     def _check_recursive(self, current: "ConfigBaseModel", context: ConfigOperationContext):
+        """Recursively check all dynamic expressions in the config."""
+
         def _check_leaf(current, field_name, field_info, value, context):
             check = field_info.json_schema_extra.get('dynamic_check')
             if check:
                 context.current_value = value
                 check.run(context)
+
         self._walk_config_fields(current, context, _check_leaf)
 
     def _process_nested(self, f, scope: int = 0, path: str = None):
