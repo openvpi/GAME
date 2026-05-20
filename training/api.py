@@ -179,16 +179,9 @@ def train_model(
         callbacks.append(checkpoint)
     trainer = lightning.pytorch.Trainer(
         accelerator=training_config.trainer.accelerator,
-        # TODO: strategy
         strategy=get_strategy(
-            devices=training_config.trainer.devices,
-            num_nodes=training_config.trainer.num_nodes,
-            accelerator=training_config.trainer.accelerator,
-            strategy={
-                "name": training_config.trainer.strategy.name,
-                **training_config.trainer.strategy.kwargs,
-            },
-            precision=training_config.trainer.precision,
+            training_config.trainer.strategy.name,
+            **training_config.trainer.strategy.kwargs,
         ),
         devices=training_config.trainer.devices,
         num_nodes=training_config.trainer.num_nodes,
