@@ -65,12 +65,9 @@ class BaseDataset(torch.utils.data.Dataset):
         self.wav_transforms = None
         self.mel_spectrogram = None
         self.spec_transforms = None
-        self.setup = False
+        self._setup()
 
     def __getitem__(self, index):
-        if not self.setup:
-            self._setup()
-            self.setup = True
         sample = self.data[index]
         spectrogram = sample["spectrogram"]
         augmentation = {}
