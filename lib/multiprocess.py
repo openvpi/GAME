@@ -9,7 +9,7 @@ class FailedItem:
     __slots__ = ("exception", "traceback_str")
 
     def __init__(self, exception: Exception, tb: str):
-        self.exception = exception
+        self.exception = repr(exception)
         self.traceback_str = tb
 
 

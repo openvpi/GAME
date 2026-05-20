@@ -73,14 +73,20 @@ def _get_width(fmt: _Fmt, key: Optional[str], value: Any) -> int:
     return width
 
 
+def _entries_width(fmt: _Fmt, entries: list) -> int:
+    items_width = sum(_get_width(fmt, k, v) for k, v in entries)
+    separators_width = (len(entries) - 1) * len(fmt.separator)
+    return items_width + separators_width + 2  # brackets
+
+
 def _process(fmt: _Fmt, elements: list, prefix: str, suffix: str):
     fmt.cur_line.append(prefix)
     fmt.cur_width += len(_strip_ansi(prefix))
-    if _get_width(fmt, None, elements) > fmt.max_width():
+    if _entries_width(fmt, elements) > fmt.max_width():
         fmt.flush_line()
         fmt.level += 1
     _add_entries(fmt, elements)
-    if _get_width(fmt, None, elements) > fmt.max_width():
+    if _entries_width(fmt, elements) > fmt.max_width():
         fmt.flush_line()
         fmt.level -= 1
     fmt.cur_line.append(suffix)

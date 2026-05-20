@@ -155,11 +155,11 @@ class NaturalNoiseAugmentationConfig(ConfigBaseModel):
     prob: float = Field(0.25, gt=0.0, le=1.0)
     max_repeats: int = Field(1, ge=1)
     noise_path_glob: str = Field("data/noise/**/*.wav")
-    _noise_file_list: list[str] = PrivateAttr(default_factory=list)
+    _noise_file_list: list[str] | None = PrivateAttr(default=None)
 
     @property
     def noise_file_list(self) -> list[str]:
-        if not self._noise_file_list:
+        if self._noise_file_list is None:
             self._noise_file_list = glob.glob(self.noise_path_glob, recursive=True)
         return self._noise_file_list
 
@@ -168,11 +168,11 @@ class RIRReverbAugmentationConfig(ConfigBaseModel):
     enabled: bool = Field(False)
     prob: float = Field(0.25, gt=0.0, le=1.0)
     kernel_path_glob: str = Field("data/reverb/**/*.wav")
-    _kernel_file_list: list[str] = PrivateAttr(default_factory=list)
+    _kernel_file_list: list[str] | None = PrivateAttr(default=None)
 
     @property
     def kernel_file_list(self) -> list[str]:
-        if not self._kernel_file_list:
+        if self._kernel_file_list is None:
             self._kernel_file_list = glob.glob(self.kernel_path_glob, recursive=True)
         return self._kernel_file_list
 

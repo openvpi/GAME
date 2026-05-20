@@ -114,7 +114,7 @@ class BaseBinarizer(abc.ABC):
             for sample in progress:
                 if isinstance(sample, FailedItem):
                     logging.error(
-                        f"Worker failed: {sample.exception}",
+                        f"Worker failed: {sample.exception}\n{sample.traceback_str}",
                         callback=progress.write
                     )
                     continue

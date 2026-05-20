@@ -165,7 +165,7 @@ class ExpressionModelCheckpoint(FriendlyModelCheckpoint):
             trainer: lightning.pytorch.Trainer,
             monitor_candidates: dict[str, torch.Tensor]
     ) -> None:
-        missing = set(self.expression.free_symbols) - monitor_candidates.keys()
+        missing = {s.name for s in self.expression.free_symbols} - monitor_candidates.keys()
         if missing:
             raise ValueError(
                 f"Expression '{self.expression}' references unknown metrics {missing}. "
