@@ -2,7 +2,7 @@ import glob
 import pathlib
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr, field_validator
 
 from .core import ConfigBaseModel
 from .ops import (
@@ -155,11 +155,11 @@ class NaturalNoiseAugmentationConfig(ConfigBaseModel):
     prob: float = Field(0.25, gt=0.0, le=1.0)
     max_repeats: int = Field(1, ge=1)
     noise_path_glob: str = Field("data/noise/**/*.wav")
+    _noise_file_list: list[str] = PrivateAttr(default_factory=list)
 
     @property
     def noise_file_list(self) -> list[str]:
-        if not hasattr(self, "_noise_file_list"):
-            # noinspection PyAttributeOutsideInit
+        if not self._noise_file_list:
             self._noise_file_list = glob.glob(self.noise_path_glob, recursive=True)
         return self._noise_file_list
 
@@ -168,11 +168,11 @@ class RIRReverbAugmentationConfig(ConfigBaseModel):
     enabled: bool = Field(False)
     prob: float = Field(0.25, gt=0.0, le=1.0)
     kernel_path_glob: str = Field("data/reverb/**/*.wav")
+    _kernel_file_list: list[str] = PrivateAttr(default_factory=list)
 
     @property
     def kernel_file_list(self) -> list[str]:
-        if not hasattr(self, "_kernel_file_list"):
-            # noinspection PyAttributeOutsideInit
+        if not self._kernel_file_list:
             self._kernel_file_list = glob.glob(self.kernel_path_glob, recursive=True)
         return self._kernel_file_list
 
