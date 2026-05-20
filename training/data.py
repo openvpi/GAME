@@ -1,4 +1,3 @@
-import dataclasses
 import math
 import pathlib
 
@@ -10,9 +9,9 @@ from lib.config.schema import AugmentationConfig
 from lib.feature.mel import StretchableMelSpectrogram
 from lib.indexed_dataset import IndexedDataset
 from .augmentation import (
-    AugmentationArgs, WaveformAugmentationContext, SpectrogramAugmentationContext,
-    generate_seed, generate_augmentation_args,
-    build_wav_transforms, build_spec_transforms,
+    WaveformAugmentationContext, SpectrogramAugmentationContext,
+    ComposedAugmentation,
+    generate_seed, build_augmentation_chain,
 )
 
 __all__ = [
@@ -61,31 +60,35 @@ class BaseDataset(torch.utils.data.Dataset):
         self.augmentation_deterministic = augmentation_deterministic
         self.augmentation_destructive_only = augmentation_destructive_only
         self.augmentation_return_dirty = augmentation_return_dirty
-        self.augmentation_args_map: dict[int, AugmentationArgs] = {}
-        self.wav_transforms = None
+        self.augmentation_chains: dict[int, tuple[ComposedAugmentation, float | None, ComposedAugmentation]] = {}
         self.mel_spectrogram = None
-        self.spec_transforms = None
-        self.setup = False
+        self._setup()
 
     def __getitem__(self, index):
-        if not self.setup:
-            self._setup()
-            self.setup = True
         sample = self.data[index]
         spectrogram = sample["spectrogram"]
         augmentation = {}
         if self.augmentation_config is not None:
-            augmentation_args = self.augmentation_args_map.get(index)
-            if augmentation_args is None:
-                # Must be indeterministic if augmentation args are not pre-generated
-                augmentation_args = generate_augmentation_args(
+            pipeline = self.augmentation_chains.get(index)
+            if pipeline is None:
+                wav_chain, pitch_shift, spec_chain = build_augmentation_chain(
                     self.augmentation_config,
+                    generator=numpy.random.default_rng(),
                     destructive_only=self.augmentation_destructive_only,
                 )
+            else:
+                wav_chain, pitch_shift, spec_chain = pipeline
             # Apply augmentations to spectrogram
-            spectrogram = self._get_augmented_spectrogram(index, spectrogram, augmentation_args)
-            # Convert augmentation args to dict for pickling
-            augmentation = dataclasses.asdict(augmentation_args)
+            spectrogram = self._get_augmented_spectrogram(
+                index, spectrogram, wav_chain, pitch_shift, spec_chain,
+            )
+            # Build serializable dict
+            augmentation = {
+                **wav_chain.args_dict(),
+                **spec_chain.args_dict(),
+            }
+            if pitch_shift is not None:
+                augmentation["pitch_shifting"] = {"shift": pitch_shift}
         spectrogram = torch.clamp(spectrogram, min=math.log(1e-5))
         if self.augmentation_return_dirty:
             sample["spectrogram"] = torch.clamp(sample["spectrogram"], min=math.log(1e-5))
@@ -121,20 +124,15 @@ class BaseDataset(torch.utils.data.Dataset):
             fmax=self.augmentation_config.features.spectrogram.fmax,
             clip_val=1e-9,
         ).eval()
-        self.wav_transforms = build_wav_transforms(self.augmentation_config)
-        self.spec_transforms = build_spec_transforms(
-            self.augmentation_config,
-            destructive_only=self.augmentation_destructive_only,
-        )
         if self.augmentation_deterministic:
-            # Pre-generate augmentation args for each sample
             seed = generate_seed(sorted(self.info.keys()))
             generator = numpy.random.default_rng(seed)
             for index in range(len(self)):
-                self.augmentation_args_map[index] = generate_augmentation_args(
+                wav_chain, pitch_shift, spec_chain = build_augmentation_chain(
                     self.augmentation_config, generator=generator,
                     destructive_only=self.augmentation_destructive_only,
                 )
+                self.augmentation_chains[index] = (wav_chain, pitch_shift, spec_chain)
 
     def _get_waveform(self, index):
         # Load original waveform
@@ -144,55 +142,41 @@ class BaseDataset(torch.utils.data.Dataset):
         )
         return waveform
 
-    def _get_augmented_spectrogram(self, index, spectrogram: torch.Tensor, args: AugmentationArgs) -> torch.Tensor:
-        # Lazily load waveform only when a waveform-domain or wav->mel transform is active
-        waveform_needed = any([
-            args.rir_kernel_path is not None,
-            args.colored_noise_exponent is not None,
-            args.natural_noise_args is not None,
-            args.pitch_shift is not None,
-        ])
+    def _get_augmented_spectrogram(
+            self, index, spectrogram: torch.Tensor,
+            wav_chain: ComposedAugmentation,
+            pitch_shift: float | None,
+            spec_chain: ComposedAugmentation
+    ) -> torch.Tensor:
+        waveform_needed = wav_chain.should_apply() or pitch_shift is not None
         if waveform_needed:
             waveform = self._get_waveform(index)
         else:
             waveform = None
 
         # Stage 1: wav -> wav
-        if waveform is not None and len(self.wav_transforms.transforms) > 0:
+        if waveform is not None:
             ctx = WaveformAugmentationContext(
                 waveform=waveform,
                 sr=self.augmentation_config.features.audio_sample_rate,
-                args=args,
-                deterministic=self.augmentation_deterministic,
-                index=index,
             )
-            self.wav_transforms(ctx)
+            wav_chain.apply(ctx)
             waveform = ctx.waveform
 
         # Stage 2: wav -> mel
         if waveform is not None:
             waveform_tensor = torch.from_numpy(waveform).unsqueeze(0)
-            if (
-                    self.augmentation_config.pitch_shifting.enabled
-                    and not self.augmentation_destructive_only
-                    and args.pitch_shift is not None
-            ):
+            if pitch_shift is not None and not self.augmentation_destructive_only:
                 spectrogram = self.mel_spectrogram(
-                    waveform_tensor, key_shift=args.pitch_shift,
+                    waveform_tensor, key_shift=pitch_shift,
                 ).squeeze(0).T
             else:
                 spectrogram = self.mel_spectrogram(waveform_tensor).squeeze(0).T
 
         # Stage 3: mel -> mel
-        if len(self.spec_transforms.transforms) > 0:
-            ctx = SpectrogramAugmentationContext(
-                spectrogram=spectrogram,
-                args=args,
-                deterministic=self.augmentation_deterministic,
-                index=index,
-            )
-            self.spec_transforms(ctx)
-            spectrogram = ctx.spectrogram
+        ctx = SpectrogramAugmentationContext(spectrogram=spectrogram)
+        spec_chain.apply(ctx)
+        spectrogram = ctx.spectrogram
 
         return spectrogram
 

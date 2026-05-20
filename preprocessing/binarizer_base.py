@@ -12,7 +12,7 @@ from lib import logging
 from lib.config.io import save_raw_config
 from lib.config.schema import BinarizerConfig
 from lib.indexed_dataset import IndexedDatasetBuilder
-from lib.multiprocess import chunked_multiprocess_run
+from lib.multiprocess import chunked_multiprocess_run, FailedItem
 from modules.commons.tts_modules import LengthRegulator
 
 ACCEPTED_AUDIO_FORMATS = {".wav", ".flac"}
@@ -112,6 +112,12 @@ class BaseBinarizer(abc.ABC):
         total_duration = 0
         with tqdm.tqdm(iterable, total=len(items), desc=f"Processing {prefix} items") as progress:
             for sample in progress:
+                if isinstance(sample, FailedItem):
+                    logging.error(
+                        f"Worker failed: {sample.exception}\n{sample.traceback_str}",
+                        callback=progress.write
+                    )
+                    continue
                 sample: DataSample
                 if sample.error:
                     logging.error(

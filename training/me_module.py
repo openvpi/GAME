@@ -41,7 +41,7 @@ class MIDIExtractionDataset(BaseDataset):
         sample = super().__getitem__(index)
         sample["T"] = torch.tensor(sample["spectrogram"].shape[0], dtype=torch.long)
         sample["N"] = torch.tensor(sample["durations"].shape[0], dtype=torch.long)
-        if (pitch_shift := sample["_augmentation"].get("pitch_shift")) is not None:
+        if (pitch_shift := sample["_augmentation"].get("pitch_shifting", {}).get("shift")) is not None:
             sample["scores"] += pitch_shift
         return sample
 

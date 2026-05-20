@@ -2,7 +2,7 @@ import glob
 import pathlib
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr, field_validator
 
 from .core import ConfigBaseModel
 from .ops import (
@@ -155,11 +155,11 @@ class NaturalNoiseAugmentationConfig(ConfigBaseModel):
     prob: float = Field(0.25, gt=0.0, le=1.0)
     max_repeats: int = Field(1, ge=1)
     noise_path_glob: str = Field("data/noise/**/*.wav")
+    _noise_file_list: list[str] | None = PrivateAttr(default=None)
 
     @property
     def noise_file_list(self) -> list[str]:
-        if not hasattr(self, "_noise_file_list"):
-            # noinspection PyAttributeOutsideInit
+        if self._noise_file_list is None:
             self._noise_file_list = glob.glob(self.noise_path_glob, recursive=True)
         return self._noise_file_list
 
@@ -168,11 +168,11 @@ class RIRReverbAugmentationConfig(ConfigBaseModel):
     enabled: bool = Field(False)
     prob: float = Field(0.25, gt=0.0, le=1.0)
     kernel_path_glob: str = Field("data/reverb/**/*.wav")
+    _kernel_file_list: list[str] | None = PrivateAttr(default=None)
 
     @property
     def kernel_file_list(self) -> list[str]:
-        if not hasattr(self, "_kernel_file_list"):
-            # noinspection PyAttributeOutsideInit
+        if self._kernel_file_list is None:
             self._kernel_file_list = glob.glob(self.kernel_path_glob, recursive=True)
         return self._kernel_file_list
 
@@ -236,6 +236,20 @@ class OptimizerConfig(ConfigBaseModel):
     kwargs: dict[str, Any] = Field(...)
 
 
+def _walk_lr_scheduler_configs(obj, fn):
+    """Recursively apply *fn* to every LRSchedulerConfig-shaped entry in *obj*."""
+    if isinstance(obj, LRSchedulerConfig):
+        return fn(obj)
+    if isinstance(obj, dict):
+        if "cls" in obj:
+            obj.setdefault("kwargs", {})
+            return fn(LRSchedulerConfig.model_validate(obj))
+        return {k: _walk_lr_scheduler_configs(v, fn) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_walk_lr_scheduler_configs(item, fn) for item in obj]
+    return obj
+
+
 class LRSchedulerConfig(ConfigBaseModel):
     cls: str = Field(...)
     kwargs: dict[str, Any] = Field(...)
@@ -245,21 +259,7 @@ class LRSchedulerConfig(ConfigBaseModel):
     # noinspection PyMethodParameters
     @field_validator("kwargs")
     def check_kwargs(cls, v):
-        res = {}
-        for key, value in v.items():
-            if isinstance(value, dict):
-                if "cls" in value:
-                    value.setdefault("kwargs", {})
-                    value = LRSchedulerConfig.model_validate(value)
-                else:
-                    value = LRSchedulerConfig.check_kwargs(value)
-            elif isinstance(value, list):
-                value = [
-                    LRSchedulerConfig.model_validate(item) if isinstance(item, dict) and "cls" in item else item
-                    for item in value
-                ]
-            res[key] = value
-        return res
+        return _walk_lr_scheduler_configs(v, lambda x: x)
 
 
 class PeriodicCheckpointConfig(ConfigBaseModel):

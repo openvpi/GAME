@@ -4,7 +4,6 @@
 
 click
 colorednoise
-dask
 einops>=0.7.0
 h5py
 librosa

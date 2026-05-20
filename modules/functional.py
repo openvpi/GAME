@@ -38,7 +38,7 @@ def format_boundaries(
         durations: Tensor,
         length: int | Tensor,
         timestep: float,
-) -> tuple[Tensor, Tensor]:
+) -> Tensor:
     boundary_indices = durations.cumsum(dim=1).div(timestep).round().long().unsqueeze(1)  # [B, 1, N]
     indices = torch.arange(length, dtype=torch.long, device=durations.device)[None, ..., None]  # [1, T, 1]
     boundaries = (indices == boundary_indices[..., :-1]).any(dim=2)  # [B, T]
