@@ -1,7 +1,7 @@
 import pathlib
 
 from lib import logging
-from lib.config.formatter import ModelFormatter
+from lib.config.formatter import format_model
 from lib.config.io import load_raw_config
 from lib.config.schema import BinarizerConfig, RootConfig
 from preprocessing.binarizer_base import BaseBinarizer
@@ -21,8 +21,7 @@ def load_config_for_binarization(
     config = RootConfig.model_validate(config, scope=scope)
     config.resolve(scope_mask=scope)
     config.check(scope_mask=scope)
-    formatter = ModelFormatter()
-    print(formatter.format(config.binarizer))
+    print(format_model(config.binarizer))
     return config.binarizer
 
 

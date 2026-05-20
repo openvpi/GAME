@@ -8,7 +8,7 @@ from lightning_utilities.core.rank_zero import rank_zero_only
 
 from lib import logging
 from lib.config.core import ConfigBaseModel
-from lib.config.formatter import ModelFormatter
+from lib.config.formatter import format_model
 from lib.config.io import load_raw_config, save_raw_config
 from lib.config.schema import RootConfig, PeriodicCheckpointConfig, ExpressionCheckpointConfig
 
@@ -21,9 +21,8 @@ __all__ = [
 
 @rank_zero_only
 def _log_config(cfg: RootConfig):
-    formatter = ModelFormatter()
-    print(formatter.format(cfg.model))
-    print(formatter.format(cfg.training))
+    print(format_model(cfg.model))
+    print(format_model(cfg.training))
 
 
 def load_config_for_training(

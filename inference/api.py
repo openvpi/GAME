@@ -9,7 +9,7 @@ from torch import Tensor
 
 from lib import logging
 from lib.config.core import ConfigBaseModel
-from lib.config.formatter import ModelFormatter
+from lib.config.formatter import format_model
 from lib.config.io import load_raw_config
 from lib.config.schema import ModelConfig, InferenceConfig, ValidationConfig
 from .me_infer import SegmentationEstimationInferenceModel
@@ -26,8 +26,7 @@ __all__ = [
 
 @rank_zero_only
 def _log_config(cfg: ConfigBaseModel):
-    formatter = ModelFormatter()
-    print(formatter.format(cfg))
+    print(format_model(cfg))
 
 
 def load_config_for_inference(
