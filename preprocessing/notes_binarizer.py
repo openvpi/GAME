@@ -2,7 +2,6 @@ import csv
 import pathlib
 from dataclasses import dataclass
 
-import dask
 import librosa
 import numpy
 import torch
@@ -84,7 +83,6 @@ class NotesBinarizer(BaseBinarizer):
             "scores": note_midi_interp,
             "presence": ~note_rest,
         }
-        data, length = dask.compute(data, length)
         return DataSample(
             path=item.waveform_fn.relative_to(self.data_dir).as_posix(),
             name=item.name,
@@ -92,12 +90,10 @@ class NotesBinarizer(BaseBinarizer):
             data=data,
         )
 
-    @dask.delayed
     def load_waveform(self, wav_fn: pathlib.Path):
         waveform, _ = librosa.load(wav_fn, sr=self.config.features.audio_sample_rate, mono=True)
         return waveform
 
-    @dask.delayed(nout=2)
     @torch.no_grad()
     def get_mel(self, waveform: numpy.ndarray):
         if self.mel_spec is None:
@@ -116,7 +112,6 @@ class NotesBinarizer(BaseBinarizer):
         ).squeeze(0).T.cpu().numpy()
         return mel, mel.shape[0]
 
-    @dask.delayed
     def sec_dur_to_frame_dur(self, dur_sec: numpy.ndarray, length: int):
         dur_cumsum = numpy.round(numpy.cumsum(dur_sec, axis=0) / self.timestep).astype(numpy.int64)
         dur_cumsum = numpy.clip(dur_cumsum, a_min=0, a_max=length)
@@ -124,17 +119,14 @@ class NotesBinarizer(BaseBinarizer):
         dur_frame = numpy.diff(dur_cumsum, axis=0, prepend=numpy.array([0]))
         return dur_frame
 
-    @dask.delayed
     def length_regulator(self, dur_frames: numpy.ndarray):
-        dur_frames = dur_frames[dur_frames > 0]  # Filter out zero-duration notes
+        dur_frames = dur_frames[dur_frames > 0]
         return self.lr(torch.from_numpy(dur_frames).long().unsqueeze(0)).squeeze(0).numpy()
 
-    @dask.delayed
     def regions_to_boundaries(self, regions: numpy.ndarray):
         boundaries = numpy.diff(regions, axis=0, prepend=numpy.array([1])) > 0
         return boundaries
 
-    @dask.delayed
     def interpolate_rest(self, note_midi: numpy.ndarray, note_rest: numpy.ndarray) -> numpy.ndarray:
         interp_func = interpolate.interp1d(
             numpy.where(~note_rest)[0], note_midi[~note_rest],

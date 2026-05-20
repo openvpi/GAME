@@ -23,13 +23,11 @@ from lib import logging
     help="Evaluation mode: the whole dataset will be processed as validation set."
 )
 def main(config: pathlib.Path, override: list[str], eval_mode: bool):
-    import dask
     from preprocessing.api import (
         load_config_for_binarization,
         binarize_datasets,
     )
     from preprocessing.notes_binarizer import NotesBinarizer
-    dask.config.set(scheduler="synchronous")
 
     config = load_config_for_binarization(config, overrides=override)
     if eval_mode:
