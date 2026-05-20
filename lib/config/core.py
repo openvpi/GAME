@@ -11,6 +11,7 @@ __all__ = [
 
 # Context variable holds current scope
 _current_scope: ContextVar[int] = ContextVar("_current_scope")
+_SCOPE_UNSET = object()
 
 
 class ConfigBaseModel(BaseModel):
@@ -27,9 +28,8 @@ class ConfigBaseModel(BaseModel):
     __field_scopes__: ClassVar[dict] = {}  # {field_name: scope_bitmask}
 
     def __init__(self, **data):
-        try:
-            _current_scope.get()
-        except LookupError:
+        scope = _current_scope.get(_SCOPE_UNSET)
+        if scope is _SCOPE_UNSET:
             token = _current_scope.set(0)
             try:
                 super().__init__(**data)
