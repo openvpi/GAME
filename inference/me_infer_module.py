@@ -32,6 +32,11 @@ class InferenceModule(lightning.pytorch.LightningModule):
 
     def setup(self, stage: str) -> None:
         super().setup(stage)
+        if stage == "test" or stage == "predict":
+            self._d3pm_ts = torch.tensor(self.config.d3pm_sample_ts_resolved)
+            self._boundary_threshold = torch.tensor(self.config.boundary_decoding_threshold)
+            self._boundary_radius = torch.tensor(self.config.boundary_decoding_radius)
+            self._note_presence_threshold = torch.tensor(self.config.note_presence_threshold)
         if stage == "fit" or stage == "validate":
             raise ValueError(f"InferenceModule does not support stage '{stage}'.")
         if stage == "test":
@@ -67,10 +72,10 @@ class InferenceModule(lightning.pytorch.LightningModule):
             waveform=waveform,
             known_durations=known_durations,
             language=language,
-            t=torch.tensor(self.config.d3pm_sample_ts_resolved).to(waveform),
-            boundary_threshold=torch.tensor(self.config.boundary_decoding_threshold).to(waveform),
-            boundary_radius=torch.tensor(self.config.boundary_decoding_radius).to(language),
-            score_threshold=torch.tensor(self.config.note_presence_threshold).to(waveform),
+            t=self._d3pm_ts.to(waveform),
+            boundary_threshold=self._boundary_threshold.to(waveform),
+            boundary_radius=self._boundary_radius.to(language),
+            score_threshold=self._note_presence_threshold.to(waveform),
         )
         return {
             "durations": durations,
@@ -94,15 +99,15 @@ class InferenceModule(lightning.pytorch.LightningModule):
         boundaries_pred, regions_pred, max_n_pred = self.model.forward_segmenter_main(
             x_seg, known_boundaries=torch.zeros_like(boundaries), mask=mask,
             language=language_ids,
-            t=torch.tensor(self.config.d3pm_sample_ts_resolved).to(spectrogram),
-            threshold=torch.tensor(self.config.boundary_decoding_threshold).to(spectrogram),
-            radius=torch.tensor(self.config.boundary_decoding_radius).to(regions),
+            t=self._d3pm_ts.to(spectrogram),
+            threshold=self._boundary_threshold.to(spectrogram),
+            radius=self._boundary_radius.to(regions),
         )
         durations_frame_pred = regions_to_durations(regions_pred, max_n=max_n_pred)  # [B, N]
         durations_pred = durations_frame_pred * self.timestep
         presence_pred, scores_pred = self.model.forward_estimator(
             x_est, regions=regions_pred, mask=mask, max_n=max_n_pred,
-            threshold=torch.tensor(self.config.note_presence_threshold).to(spectrogram),
+            threshold=self._note_presence_threshold.to(spectrogram),
         )
 
         self._update_metrics(
