@@ -35,14 +35,28 @@ class _NoteInfo:
     pitch: float
 
 
-class SaveCombinedFileCallback(lightning.pytorch.callbacks.Callback, abc.ABC):
-    def __init__(self, output_dir: str | pathlib.Path):
+class _PartAggregatingCallback(lightning.pytorch.callbacks.Callback, abc.ABC):
+    """Base class for callbacks that aggregate partial results by key."""
+
+    def __init__(self):
         super().__init__()
-        if isinstance(output_dir, str):
-            output_dir = pathlib.Path(output_dir)
-        self.output_dir = output_dir
-        self.counters: dict[str, int] = {}
-        self.notes: dict[str, list[_NoteInfo]] = {}
+        self._counters: dict[str, int] = {}
+
+    @abc.abstractmethod
+    def _get_key(self, batch: dict, i: int) -> str:
+        """Extract the aggregation key for item i in the batch."""
+
+    @abc.abstractmethod
+    def _get_total(self, batch: dict, key: str, i: int) -> int:
+        """Return the expected total number of parts for the given key."""
+
+    @abc.abstractmethod
+    def _process_item(self, key: str, batch: dict, outputs: dict, i: int) -> None:
+        """Process item i for key, accumulating data into instance state."""
+
+    @abc.abstractmethod
+    def _flush_key(self, key: str, logger_fn: Callable) -> None:
+        """Flush accumulated data for key and clean up counters."""
 
     def on_predict_batch_end(
             self,
@@ -52,44 +66,67 @@ class SaveCombinedFileCallback(lightning.pytorch.callbacks.Callback, abc.ABC):
             batch: dict[str, Any],
             *args, **kwargs
     ) -> None:
-        batch_size = batch["size"]
-        for i in range(batch_size):
-            key: str = batch["key"][i]
-            num_parts = batch["num_parts"][i]
-            if key not in self.counters:
-                self.counters[key] = 0
-                self.notes[key] = []
-            offset: float = batch["offset"][i]
-            length: float = batch["length"][i]
-            durations = outputs["durations"][i]
-            scores = outputs["scores"][i]
-            presence = outputs["presence"][i]
-            note_onset = F.pad(
-                durations, (1, 0), mode="constant", value=0
-            ).cumsum(dim=0).clamp(max=length).add(offset)
-            note_offset = durations.cumsum(dim=0).clamp(max=length).add(offset)
-            for onset, offset, score, valid in zip(
-                    note_onset.tolist(),
-                    note_offset.tolist(),
-                    scores.tolist(),
-                    presence.tolist(),
-            ):
-                if offset - onset <= 0:
-                    continue
-                if not valid:
-                    continue
-                self.notes[key].append(_NoteInfo(
-                    onset=onset,
-                    offset=offset,
-                    pitch=score,
-                ))
-            self.counters[key] += 1
-            if self.counters[key] >= num_parts:
-                self.save_file(key, logger_fn=trainer.progress_bar_callback.print)
+        for i in range(batch["size"]):
+            key = self._get_key(batch, i)
+            total = self._get_total(batch, key, i)
+            if key not in self._counters:
+                self._counters[key] = 0
+            self._process_item(key, batch, outputs, i)
+            self._counters[key] += 1
+            if self._counters[key] >= total:
+                self._flush_key(key, logger_fn=trainer.progress_bar_callback.print)
 
-    def on_predict_epoch_end(self, trainer: lightning.pytorch.Trainer, *args, **kwargs) -> None:
-        for key in self.counters.keys():
-            self.save_file(key, logger_fn=trainer.progress_bar_callback.print)
+    def on_predict_epoch_end(
+            self, trainer: lightning.pytorch.Trainer, *args, **kwargs
+    ) -> None:
+        for key in list(self._counters):
+            self._flush_key(key, logger_fn=trainer.progress_bar_callback.print)
+
+
+class SaveCombinedFileCallback(_PartAggregatingCallback, abc.ABC):
+    def __init__(self, output_dir: str | pathlib.Path):
+        super().__init__()
+        if isinstance(output_dir, str):
+            output_dir = pathlib.Path(output_dir)
+        self.output_dir = output_dir
+        self.notes: dict[str, list[_NoteInfo]] = {}
+
+    def _get_key(self, batch: dict, i: int) -> str:
+        return batch["key"][i]
+
+    def _get_total(self, batch: dict, key: str, i: int) -> int:
+        return batch["num_parts"][i]
+
+    def _process_item(self, key: str, batch: dict, outputs: dict, i: int) -> None:
+        if key not in self.notes:
+            self.notes[key] = []
+        offset: float = batch["offset"][i]
+        length: float = batch["length"][i]
+        durations = outputs["durations"][i]
+        scores = outputs["scores"][i]
+        presence = outputs["presence"][i]
+        note_onset = F.pad(
+            durations, (1, 0), mode="constant", value=0
+        ).cumsum(dim=0).clamp(max=length).add(offset)
+        note_offset = durations.cumsum(dim=0).clamp(max=length).add(offset)
+        for onset, offset, score, valid in zip(
+                note_onset.tolist(),
+                note_offset.tolist(),
+                scores.tolist(),
+                presence.tolist(),
+        ):
+            if offset - onset <= 0:
+                continue
+            if not valid:
+                continue
+            self.notes[key].append(_NoteInfo(
+                onset=onset,
+                offset=offset,
+                pitch=score,
+            ))
+
+    def _flush_key(self, key: str, logger_fn: Callable) -> None:
+        self.save_file(key, logger_fn)
 
     def save_file(self, key: str, logger_fn: Callable) -> None:
         sorted_notes = sorted(self.notes[key], key=lambda x: (x.onset, x.offset, x.pitch))
@@ -105,7 +142,7 @@ class SaveCombinedFileCallback(lightning.pytorch.callbacks.Callback, abc.ABC):
                 last_time = note.offset
                 i += 1
         self.flush(key, sorted_notes, logger_fn)
-        del self.counters[key]
+        del self._counters[key]
         del self.notes[key]
 
     @abc.abstractmethod
@@ -199,7 +236,7 @@ class SaveCombinedTextFileCallback(SaveCombinedFileCallback):
             logging.info(f"Saved CSV file: {filepath.as_posix()}", callback=logger_fn)
 
 
-class UpdateDiffSingerTranscriptionsCallback(lightning.pytorch.callbacks.Callback):
+class UpdateDiffSingerTranscriptionsCallback(_PartAggregatingCallback):
     def __init__(
             self, filelist: list[pathlib.Path],
             overwrite: bool = False,
@@ -226,7 +263,6 @@ class UpdateDiffSingerTranscriptionsCallback(lightning.pytorch.callbacks.Callbac
         self.uv_note_cond = uv_note_cond
         self.index_map: dict[str, OrderedDict[str, dict[str, Any]]] = {}
         self.lengths: dict[str, int] = {}
-        self.counters: dict[str, int] = {}
         for index in filelist:
             with open(index, "r", encoding="utf8") as f:
                 items = list(csv.DictReader(f))
@@ -236,86 +272,71 @@ class UpdateDiffSingerTranscriptionsCallback(lightning.pytorch.callbacks.Callbac
                 key = index.as_posix()
                 self.index_map[key] = o_dict
                 self.lengths[key] = len(items)
-                self.counters[key] = 0
 
-    def on_predict_batch_end(
-            self,
-            trainer: lightning.pytorch.Trainer,
-            pl_module: lightning.pytorch.LightningModule,
-            outputs: dict[str, torch.Tensor],
-            batch: dict[str, Any],
-            *args, **kwargs
-    ) -> None:
-        batch_size = batch["size"]
-        for i in range(batch_size):
-            index: str = batch["index"][i]
-            name: str = batch["name"][i]
-            durations = outputs["durations"][i]
-            scores = outputs["scores"][i]
-            presence = outputs["presence"][i]
-            valid = durations > 0
+    def _get_key(self, batch: dict, i: int) -> str:
+        return batch["index"][i]
 
-            note_dur = durations[valid].tolist()
-            note_midi = scores[valid].tolist()
-            note_vuv = presence[valid].tolist()
+    def _get_total(self, batch: dict, key: str, i: int) -> int:
+        return self.lengths[key]
 
-            item = self.index_map[index][name]
-            if self.use_wb:
-                if self.uv_note_cond == "follow":
-                    # When "follow", defer v/uv to align_notes_to_words; use raw pitch for all notes.
-                    note_seq = [
-                        librosa.midi_to_note(midi, unicode=False, cents=True)
-                        for midi in note_midi
-                    ]
-                else:  # "predict"
-                    # When "predict", apply presence-based "rest" now so alignment preserves them.
-                    note_seq = [
-                        librosa.midi_to_note(midi, unicode=False, cents=True) if vuv else "rest"
-                        for midi, vuv in zip(note_midi, note_vuv)
-                    ]
-                ph_seq = item["ph_seq"].split()
-                ph_dur = [float(d) for d in item["ph_dur"].split()]
-                ph_num = [int(n) for n in item["ph_num"].split()]
-                is_valid, err_msg = validate_phones(ph_seq, ph_dur, ph_num)
-                if not is_valid:
-                    raise ValueError(
-                        f"Invalid phone sequence in item \'{name}\' in index \'{index}\': {err_msg}"
-                    )
-                word_dur, word_vuv = parse_words(
-                    ph_seq, ph_dur, ph_num,
-                    uv_vocab=self.uv_vocab,
-                    uv_cond=self.uv_word_cond,
-                    merge_consecutive_uv=False,
-                )
-                note_seq, note_dur, note_slur = align_notes_to_words(
-                    word_dur, word_vuv,
-                    note_seq, note_dur,
-                    apply_word_uv=(self.uv_note_cond == "follow"),
-                )
-            else:
-                # No alignment: apply presence-based "rest" directly from model output.
+    def _process_item(self, key: str, batch: dict, outputs: dict, i: int) -> None:
+        name: str = batch["name"][i]
+        durations = outputs["durations"][i]
+        scores = outputs["scores"][i]
+        presence = outputs["presence"][i]
+        valid = durations > 0
+
+        note_dur = durations[valid].tolist()
+        note_midi = scores[valid].tolist()
+        note_vuv = presence[valid].tolist()
+
+        item = self.index_map[key][name]
+        if self.use_wb:
+            if self.uv_note_cond == "follow":
                 note_seq = [
-                    librosa.midi_to_note(score, unicode=False, cents=True) if pres else "rest"
-                    for score, pres in zip(note_midi, note_vuv)
+                    librosa.midi_to_note(midi, unicode=False, cents=True)
+                    for midi in note_midi
                 ]
-                note_slur = None
+            else:  # "predict"
+                note_seq = [
+                    librosa.midi_to_note(midi, unicode=False, cents=True) if vuv else "rest"
+                    for midi, vuv in zip(note_midi, note_vuv)
+                ]
+            ph_seq = item["ph_seq"].split()
+            ph_dur = [float(d) for d in item["ph_dur"].split()]
+            ph_num = [int(n) for n in item["ph_num"].split()]
+            is_valid, err_msg = validate_phones(ph_seq, ph_dur, ph_num)
+            if not is_valid:
+                raise ValueError(
+                    f"Invalid phone sequence in item \'{name}\' in index \'{key}\': {err_msg}"
+                )
+            word_dur, word_vuv = parse_words(
+                ph_seq, ph_dur, ph_num,
+                uv_vocab=self.uv_vocab,
+                uv_cond=self.uv_word_cond,
+                merge_consecutive_uv=False,
+            )
+            note_seq, note_dur, note_slur = align_notes_to_words(
+                word_dur, word_vuv,
+                note_seq, note_dur,
+                apply_word_uv=(self.uv_note_cond == "follow"),
+            )
+        else:
+            note_seq = [
+                librosa.midi_to_note(score, unicode=False, cents=True) if pres else "rest"
+                for score, pres in zip(note_midi, note_vuv)
+            ]
+            note_slur = None
 
-            item["note_seq"] = " ".join(note_seq)
-            item["note_dur"] = " ".join(f"{dur:.3f}" for dur in note_dur)
-            if note_slur is None:
-                item.pop("note_slur", None)
-            else:
-                item["note_slur"] = " ".join(str(s) for s in note_slur)
-            item.pop("note_glide", None)
-            self.counters[index] += 1
-            if self.counters[index] >= self.lengths[index]:
-                self.flush(index, logger_fn=trainer.progress_bar_callback.print)
+        item["note_seq"] = " ".join(note_seq)
+        item["note_dur"] = " ".join(f"{dur:.3f}" for dur in note_dur)
+        if note_slur is None:
+            item.pop("note_slur", None)
+        else:
+            item["note_slur"] = " ".join(str(s) for s in note_slur)
+        item.pop("note_glide", None)
 
-    def on_predict_epoch_end(self, trainer: lightning.pytorch.Trainer, *args, **kwargs) -> None:
-        for index in self.counters.keys():
-            self.flush(index, logger_fn=trainer.progress_bar_callback.print)
-
-    def flush(self, key: str, logger_fn: Callable):
+    def _flush_key(self, key: str, logger_fn: Callable) -> None:
         items = list(self.index_map[key].values())
         index = pathlib.Path(key)
         if self.overwrite:
@@ -332,7 +353,7 @@ class UpdateDiffSingerTranscriptionsCallback(lightning.pytorch.callbacks.Callbac
             writer.writerows(items)
         del self.index_map[key]
         del self.lengths[key]
-        del self.counters[key]
+        del self._counters[key]
         logging.info(f"Saved transcriptions: {save_path.as_posix()}", callback=logger_fn)
 
 
