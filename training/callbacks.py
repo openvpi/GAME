@@ -169,13 +169,13 @@ class ExpressionModelCheckpoint(FriendlyModelCheckpoint):
         if missing:
             raise ValueError(
                 f"Expression '{self.expression}' references unknown metrics {missing}. "
-                f"Available metrics: {sorted(monitor_candidates.keys())}"
+                f"Valid candidates: {sorted(monitor_candidates.keys())}"
             )
         eval_result = self.expression.evalf(subs=monitor_candidates)
         if not isinstance(eval_result, sympy.Number):
             raise ValueError(
                 f"Expression '{self.expression}' not fully evaluated. "
-                f"Available metrics: {sorted(monitor_candidates.keys())}"
+                f"Valid candidates: {sorted(monitor_candidates.keys())}"
             )
         eval_result = torch.tensor(float(eval_result), dtype=torch.float32)
         monitor_candidates[self.metric_key] = eval_result

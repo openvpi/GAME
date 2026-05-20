@@ -120,7 +120,7 @@ class NotesBinarizer(BaseBinarizer):
         return dur_frame
 
     def length_regulator(self, dur_frames: numpy.ndarray):
-        dur_frames = dur_frames[dur_frames > 0]
+        dur_frames = dur_frames[dur_frames > 0]  # Filter out zero-duration notes
         return self.lr(torch.from_numpy(dur_frames).long().unsqueeze(0)).squeeze(0).numpy()
 
     def regions_to_boundaries(self, regions: numpy.ndarray):

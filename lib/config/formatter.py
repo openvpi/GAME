@@ -51,9 +51,9 @@ def _get_width(fmt: _Fmt, key: Optional[str], value: Any) -> int:
             not field.exclude and hasattr(value, name) and getattr(value, name) is not None
             for name, field in type(value).model_fields.items()
         ):
-            width = float('inf')
+            width = float('inf')  # force new line
         else:
-            width = key_width + 2
+            width = key_width + 2  # wrap empty object
     elif isinstance(value, (tuple, list)):
         item_count = len(value)
         items_width = sum(_get_width(fmt, None, item) for item in value)

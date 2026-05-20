@@ -1,4 +1,5 @@
 import abc
+import operator as _operator
 import re
 
 from pydantic import BaseModel
@@ -152,8 +153,6 @@ class GetContext(ConfigOperationBase):
             return context
         return getattr(context, self.attr, None)
 
-
-import operator as _operator
 
 _BINARY_OPS = {
     "+": _operator.add,

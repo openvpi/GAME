@@ -281,6 +281,7 @@ class Exporter:
                 "durations": {0: "B", 1: "N"},
                 "maskN": {0: "B", 1: "N"},
             },
+            # We don't use Dynamo here because the function contains dynamic shapes depending on inputs.
             opset_version=min(20, self.opset_version),
             dynamo=False,
             external_data=False,

@@ -38,6 +38,7 @@ def _get_bind(last=1):
     """Walk the stack to get the real caller's module, function, and line."""
     frame = inspect.currentframe()
     try:
+        # Get the caller's frame
         for _ in range(last + 1):
             frame = frame.f_back
         name = frame.f_globals["__name__"]

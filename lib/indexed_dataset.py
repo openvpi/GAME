@@ -40,7 +40,7 @@ class IndexedDataset:
         item = {}
         for k, v in self.dset[str(i)].items():
             v = v[()]
-            if v.ndim == 0:
+            if v.ndim == 0:  # scalars saved as numpy.ndarray but loaded with numpy scalar types
                 v = torch.tensor(v)
             else:
                 v = torch.from_numpy(v)
