@@ -84,7 +84,7 @@ under fp32 no-cache *(align* subcommand).  The first column is the reference
 performance, so the fp32 row shows how much the *extract* evaluation mode
 deviates from the *align*-generated labels.
 
-| Threshold | Chamfer ↓ | Qty err rate ↓ | Precision | Recall | F1 | Pitch RMSE ↓ | Pitch Acc ↑ | Overall Acc ↑ |
+| Threshold | Chamfer ↓ | Qty err rate ↓ | Qty Prec ↑ | Qty Rec ↑ | F1 ↑ | Pitch RMSE ↓ | Pitch Acc ↑ | Overall Acc ↑ |
 |---|---|---|---|---|---|---|---|---|
 | fp32 | 1.248 | 7.79% | 0.979 | 0.943 | 0.993 | 0.358 | 0.9882 | 0.9831 |
 | th=0.08 | 1.252 | 7.84% | 0.977 | 0.944 | 0.993 | 0.356 | 0.9881 | 0.9827 |
