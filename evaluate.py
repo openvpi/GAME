@@ -63,6 +63,14 @@ from lib import logging
     "--precision", type=click.STRING, default="32-true", show_default=True,
     help="Precision for evaluation."
 )
+@click.option(
+    "--cache-threshold", type=click.FloatRange(min=0), default=0.0, show_default=True,
+    help="Enable DBCache on the segmenter (0 = off). See CACHE_DIT.md."
+)
+@click.option(
+    "--cache-fn-blocks", type=click.IntRange(min=1), default=1, show_default=True,
+    help="Number of front blocks always executed when DBCache is on."
+)
 def main(
         dataset: pathlib.Path,
         model: pathlib.Path,
@@ -73,6 +81,8 @@ def main(
         batch_size: int,
         num_workers: int,
         precision: str,
+        cache_threshold: float,
+        cache_fn_blocks: int,
 ):
     from lightning_utilities.core.rank_zero import rank_zero_info, rank_zero_only
     from inference.api import (
@@ -121,6 +131,8 @@ def main(
         num_workers=num_workers,
         precision=precision,
         mode="evaluate",
+        cache_threshold=cache_threshold if cache_threshold > 0 else None,
+        cache_fn_blocks=cache_fn_blocks,
     )
     logging.success("Evaluation completed.", callback=rank_zero_info)
 
