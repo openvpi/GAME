@@ -109,7 +109,24 @@ def infer_model(
         num_workers: int = 0,
         precision: str = "32-true",
         mode: Literal["predict", "evaluate"] = "predict",
+        cache_threshold: float | None = None,
+        cache_fn_blocks: int = 1,
+        cache_warmup_steps: int = 1,
 ):
+    if cache_threshold is not None and cache_threshold > 0:
+        from .cache import DBCacheSegmenter
+        cacher = DBCacheSegmenter(
+            model.model.segmenter,
+            fn_blocks=cache_fn_blocks,
+            threshold=cache_threshold,
+            warmup_steps=cache_warmup_steps,
+        ).install_into(model)
+        model._dbcache = cacher
+        logging.info(
+            f"DBCache enabled: fn_blocks={cache_fn_blocks}, "
+            f"threshold={cache_threshold}, warmup_steps={cache_warmup_steps}",
+            callback=rank_zero_info,
+        )
     module = InferenceModule(model=model, config=config)
     trainer = lightning.pytorch.Trainer(
         precision=precision,
@@ -132,3 +149,11 @@ def infer_model(
         trainer.test(module, dataloader)
     else:
         raise ValueError(f"Unknown mode: {mode}")
+    if cache_threshold is not None and cache_threshold > 0:
+        cacher = getattr(model, "_dbcache", None)
+        if cacher is not None:
+            logging.info(
+                f"DBCache hit rate: {cacher.hits}/{cacher.hits + cacher.misses} "
+                f"({cacher.hit_rate:.1%})",
+                callback=rank_zero_info,
+            )

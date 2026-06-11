@@ -200,6 +200,22 @@ def shared_options(func=None, *, defaults: dict[str, Any] = None):
             default=defaults.get(_OPT_KEY_EST_THRESHOLD, 0.2),
             help="Presence detecting threshold for estimation model."
         ),
+        click.option(
+            "--cache-threshold", type=click.FloatRange(min=0), show_default=True,
+            default=0.0,
+            help=(
+                "Enable DBCache (cache-dit style) on the segmenter. "
+                "Normalized L1 residual threshold below which tail blocks "
+                "are skipped between D3PM steps. 0 disables caching. "
+                "Recommended: 0.25 (~1.47x speedup, within D3PM stochastic noise); "
+                "aggressive: 0.40 (~1.66x). See CACHE_DIT.md for details."
+            )
+        ),
+        click.option(
+            "--cache-fn-blocks", type=click.IntRange(min=1), show_default=True,
+            default=1,
+            help="Number of leading (warmup) blocks always executed when DBCache is on."
+        ),
     ]
 
     def decorator(f):
@@ -287,6 +303,8 @@ def extract(
         nsteps: int,
         ts: list[float],
         est_threshold: float,
+        cache_threshold: float,
+        cache_fn_blocks: int,
         input_formats: set[str],
         glb: str,
         output_formats: set[str],
@@ -360,6 +378,8 @@ def extract(
         batch_size=batch_size,
         num_workers=num_workers,
         precision=precision,
+        cache_threshold=cache_threshold if cache_threshold > 0 else None,
+        cache_fn_blocks=cache_fn_blocks,
     )
     logging.success("Inference completed.", callback=rank_zero_info)
 
@@ -450,6 +470,8 @@ def align(
         nsteps: int,
         ts: list[float],
         est_threshold: float,
+        cache_threshold: float,
+        cache_fn_blocks: int,
         save_path: pathlib.Path,
         save_name: str,
         overwrite: bool,
@@ -535,6 +557,8 @@ def align(
         batch_size=batch_size,
         num_workers=num_workers,
         precision=precision,
+        cache_threshold=cache_threshold if cache_threshold > 0 else None,
+        cache_fn_blocks=cache_fn_blocks,
     )
     logging.success("Inference completed.", callback=rank_zero_info)
 
