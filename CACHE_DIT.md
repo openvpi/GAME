@@ -78,20 +78,29 @@ Implementation: [`inference/cache.py`](inference/cache.py).
 
 ### Accuracy
 
-D3PM sampling is stochastic, so two independent fp32 runs are not bit-identical.
-The first row below establishes the stochastic noise floor; all metrics are
-reported against the original fp32 run.
+Evaluated with `evaluate.py` on a private vocal test set (1063
+samples, zh vocal, `--nsteps 8`).  Ground truth was produced by the same model
+under fp32 no-cache *(align* subcommand).  The first column is the reference
+performance, so the fp32 row shows how much the *extract* evaluation mode
+deviates from the *align*-generated labels.
 
-| Configuration | Δ note count | Onset match (≤50 ms) | Pitch mismatch in matched | Mean onset error | Mean duration error |
-|---|---|---|---|---|---|
-| fp32 rerun (noise floor) | −4 | 98.2% | 9 | 1.0 ms | 9.9 ms |
-| `--cache-threshold 0.08` | +9 | 99.1% | 13 | 1.2 ms | 12.5 ms |
-| `--cache-threshold 0.15` | −7 | 98.0% | 15 | 1.2 ms | 13.8 ms |
-| `--cache-threshold 0.25` | +1 | 97.8% | 10 | 0.9 ms | 10.2 ms |
-| `--cache-threshold 0.40` | +1 | 98.2% |  8 | 0.9 ms |  9.6 ms |
+| Threshold | Chamfer ↓ | Qty err rate ↓ | Precision | Recall | F1 | Pitch RMSE ↓ | Pitch Acc ↑ | Overall Acc ↑ |
+|---|---|---|---|---|---|---|---|---|
+| fp32 | 1.248 | 7.79% | 0.979 | 0.943 | 0.993 | 0.358 | 0.9882 | 0.9831 |
+| th=0.08 | 1.252 | 7.84% | 0.977 | 0.944 | 0.993 | 0.356 | 0.9881 | 0.9827 |
+| th=0.15 | 1.252 | 7.68% | 0.979 | 0.944 | 0.993 | 0.357 | 0.9883 | 0.9831 |
+| th=0.25 | 1.297 | 8.34% | 0.972 | 0.943 | 0.992 | 0.365 | 0.9880 | 0.9804 |
+| th=0.40 | 1.294 | 8.48% | 0.971 | 0.943 | 0.992 | 0.368 | 0.9876 | 0.9804 |
 
-All cached configurations fall within the D3PM stochastic noise floor on every
-metric, including the most aggressive `τ = 0.40`.
+Interpretation:
+- **fp32 baseline vs GT** is itself imperfect (Overall Acc 0.983) because the
+  GT was produced by `align` (which post-processes notes) while `evaluate.py`
+  measures raw *extract* output.
+- **th=0.08 / 0.15** are essentially indistinguishable from fp32 on every
+  metric — pitch accuracy is within 0.01 %.
+- **th=0.25 / 0.40** show a mild rise in Chamfer distance (+0.05) and
+  quantity error (+0.5 pp), and a 0.3 pp drop in Overall Accuracy.  Pitch
+  accuracy remains within 0.1 % of baseline.
 
 ## Usage
 
