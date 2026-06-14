@@ -101,6 +101,25 @@ def load_inference_model(path: pathlib.Path) -> tuple[SegmentationEstimationInfe
     return model, lang_map
 
 
+def _report_and_uninstall_cache(
+    model: SegmentationEstimationInferenceModel,
+    cache_threshold: float | None,
+) -> None:
+    """Log the cache hit rate (if applicable) and uninstall all wrappers."""
+    if cache_threshold is None or cache_threshold <= 0:
+        return
+    cacher = getattr(model, "_dbcache", None)
+    if cacher is None:
+        return
+    logging.info(
+        f"DBCache hit rate: {cacher.hits}/{cacher.hits + cacher.misses} "
+        f"({cacher.hit_rate:.1%})",
+        callback=rank_zero_info,
+    )
+    cacher.uninstall()
+    del model._dbcache
+
+
 def infer_model(
         model: SegmentationEstimationInferenceModel,
         dataset: torch.utils.data.Dataset,
@@ -151,17 +170,12 @@ def infer_model(
         persistent_workers=num_workers > 0,
         collate_fn=dataset.collate if hasattr(dataset, "collate") else None,
     )
-    if mode == "predict":
-        trainer.predict(module, dataloader)
-    elif mode == "evaluate":
-        trainer.test(module, dataloader)
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
-    if cache_threshold is not None and cache_threshold > 0:
-        cacher = getattr(model, "_dbcache", None)
-        if cacher is not None:
-            logging.info(
-                f"DBCache hit rate: {cacher.hits}/{cacher.hits + cacher.misses} "
-                f"({cacher.hit_rate:.1%})",
-                callback=rank_zero_info,
-            )
+    try:
+        if mode == "predict":
+            trainer.predict(module, dataloader)
+        elif mode == "evaluate":
+            trainer.test(module, dataloader)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+    finally:
+        _report_and_uninstall_cache(model, cache_threshold)

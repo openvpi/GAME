@@ -96,6 +96,8 @@ class DBCacheSegmenter:
         self.hits = 0
         self.misses = 0
         self._orig_forward = None
+        self._orig_fsm = None
+        self._inference_model = None
         self.reset()
 
     @property
@@ -117,14 +119,20 @@ class DBCacheSegmenter:
         call, which corresponds to one audio segment in the batch. This means
         the cache is reused across the ``nsteps`` D3PM iterations of a single
         segment but is never carried across unrelated segments.
+
+        .. note::
+
+            Call :meth:`uninstall` after inference to restore the original
+            ``forward`` and ``forward_segmenter_main`` methods.
         """
         self._install_segmenter_hook()
-        orig_fsm = inference_model.forward_segmenter_main
+        self._inference_model = inference_model
+        self._orig_fsm = inference_model.forward_segmenter_main
         cacher = self
 
         def fsm_with_reset(*args, **kwargs):
             cacher.reset()
-            return orig_fsm(*args, **kwargs)
+            return self._orig_fsm(*args, **kwargs)
 
         inference_model.forward_segmenter_main = fsm_with_reset
         return self
@@ -181,4 +189,8 @@ class DBCacheSegmenter:
         if self._orig_forward is not None:
             self.seg.forward = self._orig_forward
             self._orig_forward = None
+        if self._orig_fsm is not None:
+            self._inference_model.forward_segmenter_main = self._orig_fsm
+            self._orig_fsm = None
+            self._inference_model = None
         self.reset()
