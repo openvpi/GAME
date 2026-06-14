@@ -133,6 +133,7 @@ def infer_model(
         cache_fn_blocks: int = 1,
         cache_warmup_steps: int = 1,
 ):
+    cache_installed = False
     if cache_threshold is not None and cache_threshold > 0:
         if not isinstance(model.model.segmenter, CachableBackbone):
             logging.warning(
@@ -149,28 +150,29 @@ def infer_model(
                 warmup_steps=cache_warmup_steps,
             ).install_into(model)
             model._dbcache = cacher
+            cache_installed = True
             logging.info(
                 f"DBCache enabled: fn_blocks={cache_fn_blocks}, "
                 f"threshold={cache_threshold}, warmup_steps={cache_warmup_steps}",
                 callback=rank_zero_info,
             )
-    module = InferenceModule(model=model, config=config)
-    trainer = lightning.pytorch.Trainer(
-        precision=precision,
-        logger=False,
-        enable_checkpointing=False,
-        callbacks=callbacks,
-    )
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        prefetch_factor=2 if num_workers > 0 else None,
-        shuffle=False,
-        persistent_workers=num_workers > 0,
-        collate_fn=dataset.collate if hasattr(dataset, "collate") else None,
-    )
     try:
+        module = InferenceModule(model=model, config=config)
+        trainer = lightning.pytorch.Trainer(
+            precision=precision,
+            logger=False,
+            enable_checkpointing=False,
+            callbacks=callbacks,
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            prefetch_factor=2 if num_workers > 0 else None,
+            shuffle=False,
+            persistent_workers=num_workers > 0,
+            collate_fn=dataset.collate if hasattr(dataset, "collate") else None,
+        )
         if mode == "predict":
             trainer.predict(module, dataloader)
         elif mode == "evaluate":
@@ -178,4 +180,5 @@ def infer_model(
         else:
             raise ValueError(f"Unknown mode: {mode}")
     finally:
-        _report_and_uninstall_cache(model, cache_threshold)
+        if cache_installed:
+            _report_and_uninstall_cache(model, cache_threshold)
