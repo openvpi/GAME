@@ -12,6 +12,7 @@ from lib.config.core import ConfigBaseModel
 from lib.config.formatter import format_model
 from lib.config.io import load_raw_config
 from lib.config.schema import ModelConfig, InferenceConfig, ValidationConfig
+from modules.backbones.cache_protocol import CachableBackbone
 from .me_infer import SegmentationEstimationInferenceModel
 from .me_infer_module import InferenceModule
 
@@ -114,19 +115,26 @@ def infer_model(
         cache_warmup_steps: int = 1,
 ):
     if cache_threshold is not None and cache_threshold > 0:
-        from .cache import DBCacheSegmenter
-        cacher = DBCacheSegmenter(
-            model.model.segmenter,
-            fn_blocks=cache_fn_blocks,
-            threshold=cache_threshold,
-            warmup_steps=cache_warmup_steps,
-        ).install_into(model)
-        model._dbcache = cacher
-        logging.info(
-            f"DBCache enabled: fn_blocks={cache_fn_blocks}, "
-            f"threshold={cache_threshold}, warmup_steps={cache_warmup_steps}",
-            callback=rank_zero_info,
-        )
+        if not isinstance(model.model.segmenter, CachableBackbone):
+            logging.warning(
+                f"Segmenter ({type(model.model.segmenter).__name__}) does not "
+                f"implement CachableBackbone. DBCache disabled.",
+                callback=rank_zero_info,
+            )
+        else:
+            from .cache import DBCacheSegmenter
+            cacher = DBCacheSegmenter(
+                model.model.segmenter,
+                fn_blocks=cache_fn_blocks,
+                threshold=cache_threshold,
+                warmup_steps=cache_warmup_steps,
+            ).install_into(model)
+            model._dbcache = cacher
+            logging.info(
+                f"DBCache enabled: fn_blocks={cache_fn_blocks}, "
+                f"threshold={cache_threshold}, warmup_steps={cache_warmup_steps}",
+                callback=rank_zero_info,
+            )
     module = InferenceModule(model=model, config=config)
     trainer = lightning.pytorch.Trainer(
         precision=precision,

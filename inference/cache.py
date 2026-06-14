@@ -47,6 +47,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from modules.backbones.cache_protocol import CachableBackbone
+
 __all__ = ["DBCacheSegmenter"]
 
 
@@ -74,9 +76,18 @@ class DBCacheSegmenter:
     ):
         if fn_blocks < 1:
             raise ValueError("fn_blocks must be >= 1")
-        if not hasattr(segmenter, "layers"):
+        if not isinstance(segmenter, CachableBackbone):
             raise TypeError(
-                "segmenter does not look like an EBFBackbone (no `layers` attr)"
+                f"segmenter must be a CachableBackbone instance, "
+                f"got {type(segmenter).__name__}"
+            )
+        if (
+            segmenter.latent_block_idx is not None
+            and segmenter.latent_block_idx < fn_blocks
+        ):
+            raise ValueError(
+                f"latent_block_idx ({segmenter.latent_block_idx}) must be "
+                f">= fn_blocks ({fn_blocks})."
             )
         self.seg = segmenter
         self.fn = fn_blocks
@@ -124,12 +135,10 @@ class DBCacheSegmenter:
 
         def cached_forward(x: torch.Tensor, mask: torch.Tensor | None = None):
             seg = cacher.seg
-            x = seg.input_proj(x)
+            x = seg.input_head(x)
 
             # Always run the front blocks.
-            for i in range(cacher.fn):
-                x = seg.layers[i](x, mask=mask)
-            x_front = x
+            x_front = seg.run_front(x, cacher.fn, mask=mask)
 
             # Decide whether to skip the tail blocks.
             use_cache = False
@@ -149,21 +158,7 @@ class DBCacheSegmenter:
                 latent = cacher._latent_cache
                 cacher.hits += 1
             else:
-                latent = None
-                x_run = x_front
-                for i in range(cacher.fn, len(seg.layers)):
-                    x_run = seg.layers[i](x_run, mask=mask)
-                    if seg.return_latent and i == seg.latent_layer_idx - 1:
-                        latent = seg.latent_norm(x_run)
-                        latent = seg.latent_proj(latent)
-                if seg.return_latent and latent is None:
-                    # The latent tap is inside the warmup zone — would need
-                    # to be recomputed from x_front for correctness.
-                    raise RuntimeError(
-                        f"latent_layer_idx ({seg.latent_layer_idx}) is within "
-                        f"the cached front zone (fn={cacher.fn}); set "
-                        f"fn_blocks < latent_layer_idx."
-                    )
+                x_run, latent = seg.run_tail(x_front, cacher.fn, mask=mask)
                 x_out = x_run
                 cacher._tail_delta = (x_out - x_front).detach()
                 cacher._latent_cache = (
@@ -174,10 +169,8 @@ class DBCacheSegmenter:
             cacher._prev_front = x_front.detach()
             cacher._step += 1
 
-            if seg.use_out_norm:
-                x_out = seg.output_norm(x_out)
-            out = seg.output_proj(x_out)
-            if seg.return_latent:
+            out = seg.output_head(x_out)
+            if seg.returns_latent:
                 return out, latent
             return out
 
