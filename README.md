@@ -1,6 +1,6 @@
 # GAME: Generative Adaptive MIDI Extractor
 
-[Technical Report](ALGORITHMS.md) · [CacheDiT acceleration](CACHE_DIT.md) (this branch, up to **1.66x** faster inference)
+[Technical Report](ALGORITHMS.md) · [CacheDiT acceleration](CACHE_DIT.md)
 
 ## Overview
 
