@@ -290,8 +290,8 @@ class EBFBackbone(CachableBackbone, nn.Module):
                 latent = self.extract_latent(x)
         if self.return_latent and latent is None:
             raise RuntimeError(
-                f"latent_layer_idx ({self.latent_layer_idx}) is within "
-                f"the front zone; set fn_blocks < latent_layer_idx."
+                f"latent_layer_idx ({self.latent_layer_idx}) is before "
+                f"start block ({start}); set start <= {self.latent_layer_idx - 1}."
             )
         return x, latent
 

@@ -13,6 +13,7 @@ from lib.config.formatter import format_model
 from lib.config.io import load_raw_config
 from lib.config.schema import ModelConfig, InferenceConfig, ValidationConfig
 from modules.backbones.cache_protocol import CachableBackbone
+from .cache import DBCacheSegmenter
 from .me_infer import SegmentationEstimationInferenceModel
 from .me_infer_module import InferenceModule
 
@@ -103,14 +104,9 @@ def load_inference_model(path: pathlib.Path) -> tuple[SegmentationEstimationInfe
 
 def _report_and_uninstall_cache(
     model: SegmentationEstimationInferenceModel,
-    cache_threshold: float | None,
 ) -> None:
-    """Log the cache hit rate (if applicable) and uninstall all wrappers."""
-    if cache_threshold is None or cache_threshold <= 0:
-        return
-    cacher = getattr(model, "_dbcache", None)
-    if cacher is None:
-        return
+    """Log the cache hit rate and uninstall all wrappers."""
+    cacher = model._dbcache
     logging.info(
         f"DBCache hit rate: {cacher.hits}/{cacher.hits + cacher.misses} "
         f"({cacher.hit_rate:.1%})",
@@ -142,7 +138,6 @@ def infer_model(
                 callback=rank_zero_info,
             )
         else:
-            from .cache import DBCacheSegmenter
             cacher = DBCacheSegmenter(
                 model.model.segmenter,
                 fn_blocks=cache_fn_blocks,
@@ -181,4 +176,4 @@ def infer_model(
             raise ValueError(f"Unknown mode: {mode}")
     finally:
         if cache_installed:
-            _report_and_uninstall_cache(model, cache_threshold)
+            _report_and_uninstall_cache(model)

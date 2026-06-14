@@ -42,10 +42,7 @@ Example
     # ... run inference as usual ...
     print(f"cache hit rate: {cacher.hit_rate:.1%}")
 """
-from __future__ import annotations
-
 import torch
-from torch import nn
 
 from modules.backbones.cache_protocol import CachableBackbone
 
@@ -55,7 +52,7 @@ __all__ = ["DBCacheSegmenter"]
 class DBCacheSegmenter:
     """Residual-difference step cache for the segmenter.
 
-    :param segmenter: The segmenter module (an ``EBFBackbone`` instance). Its
+    :param segmenter: The segmenter module (a ``CachableBackbone`` instance). Its
         ``forward`` is monkey-patched to introduce caching.
     :param fn_blocks: Number of leading blocks always executed (the "front"
         used to compute the residual delta). 1 is usually enough.
@@ -69,7 +66,7 @@ class DBCacheSegmenter:
 
     def __init__(
         self,
-        segmenter: nn.Module,
+        segmenter: CachableBackbone,
         fn_blocks: int = 1,
         threshold: float = 0.25,
         warmup_steps: int = 1,
@@ -132,7 +129,7 @@ class DBCacheSegmenter:
 
         def fsm_with_reset(*args, **kwargs):
             cacher.reset()
-            return self._orig_fsm(*args, **kwargs)
+            return cacher._orig_fsm(*args, **kwargs)
 
         inference_model.forward_segmenter_main = fsm_with_reset
         return self
