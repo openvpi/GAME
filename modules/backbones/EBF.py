@@ -4,6 +4,7 @@ from torch import nn
 import torch.nn.functional as F
 
 from deployment.context import is_export_mode
+from modules.backbones.cache_protocol import CachableBackbone
 from modules.backbones.eglu import HalfCacheGLUFFN
 from modules.backbones.layers import LayerScale, RMSNorm, GLUFFN, FFN, CgMLP
 from modules.backbones.rope import SingleRoPosEmb
@@ -186,7 +187,7 @@ class EBF(nn.Module):
         return x
 
 
-class EBFBackbone(nn.Module):
+class EBFBackbone(CachableBackbone, nn.Module):
     def __init__(
             self, in_dim: int, out_dim: int, return_latent: bool,
             dim: int = 256,
@@ -242,6 +243,63 @@ class EBFBackbone(nn.Module):
         if self.use_out_norm:
             self.output_norm = RMSNorm(dim)
         self.output_proj = nn.Linear(dim, out_dim)  # -> [B, T, C_out]
+
+    # ---- CachableBackbone protocol ---------------------------------------
+
+    @property
+    def num_blocks(self) -> int:
+        return len(self.layers)
+
+    @property
+    def latent_block_idx(self) -> int | None:
+        if not self.return_latent:
+            return None
+        # latent_layer_idx is 1-indexed in forward(); the protocol uses 0‑indexed.
+        return self.latent_layer_idx - 1
+
+    def input_head(self, x: torch.Tensor) -> torch.Tensor:
+        return self.input_proj(x)
+
+    def output_head(self, x: torch.Tensor) -> torch.Tensor:
+        if self.use_out_norm:
+            x = self.output_norm(x)
+        return self.output_proj(x)
+
+    def run_front(
+        self,
+        x: torch.Tensor,
+        n: int,
+        *,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        for i in range(n):
+            x = self.layers[i](x, mask=mask)
+        return x
+
+    def run_tail(
+        self,
+        x: torch.Tensor,
+        start: int,
+        *,
+        mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        latent: torch.Tensor | None = None
+        for i in range(start, len(self.layers)):
+            x = self.layers[i](x, mask=mask)
+            if self.return_latent and i == self.latent_layer_idx - 1:
+                latent = self.extract_latent(x)
+        if self.return_latent and latent is None:
+            raise RuntimeError(
+                f"latent_layer_idx ({self.latent_layer_idx}) is before "
+                f"start block ({start}); set start <= {self.latent_layer_idx - 1}."
+            )
+        return x, latent
+
+    def extract_latent(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.latent_norm(x)
+        return self.latent_proj(x)
+
+    # ---- original forward ------------------------------------------------
 
     def forward(self, x, mask=None):
         """

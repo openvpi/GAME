@@ -12,6 +12,8 @@ from lib.config.core import ConfigBaseModel
 from lib.config.formatter import format_model
 from lib.config.io import load_raw_config
 from lib.config.schema import ModelConfig, InferenceConfig, ValidationConfig
+from modules.backbones.cache_protocol import CachableBackbone
+from .cache import DBCacheSegmenter
 from .me_infer import SegmentationEstimationInferenceModel
 from .me_infer_module import InferenceModule
 
@@ -100,6 +102,20 @@ def load_inference_model(path: pathlib.Path) -> tuple[SegmentationEstimationInfe
     return model, lang_map
 
 
+def _report_and_uninstall_cache(
+    model: SegmentationEstimationInferenceModel,
+) -> None:
+    """Log the cache hit rate and uninstall all wrappers."""
+    cacher = model._dbcache
+    logging.info(
+        f"DBCache hit rate: {cacher.hits}/{cacher.hits + cacher.misses} "
+        f"({cacher.hit_rate:.1%})",
+        callback=rank_zero_info,
+    )
+    cacher.uninstall()
+    del model._dbcache
+
+
 def infer_model(
         model: SegmentationEstimationInferenceModel,
         dataset: torch.utils.data.Dataset,
@@ -109,26 +125,55 @@ def infer_model(
         num_workers: int = 0,
         precision: str = "32-true",
         mode: Literal["predict", "evaluate"] = "predict",
+        cache_threshold: float | None = None,
+        cache_fn_blocks: int = 1,
+        cache_warmup_steps: int = 1,
 ):
-    module = InferenceModule(model=model, config=config)
-    trainer = lightning.pytorch.Trainer(
-        precision=precision,
-        logger=False,
-        enable_checkpointing=False,
-        callbacks=callbacks,
-    )
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        prefetch_factor=2 if num_workers > 0 else None,
-        shuffle=False,
-        persistent_workers=num_workers > 0,
-        collate_fn=dataset.collate if hasattr(dataset, "collate") else None,
-    )
-    if mode == "predict":
-        trainer.predict(module, dataloader)
-    elif mode == "evaluate":
-        trainer.test(module, dataloader)
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
+    cache_installed = False
+    if cache_threshold is not None and cache_threshold > 0:
+        if not isinstance(model.model.segmenter, CachableBackbone):
+            logging.warning(
+                f"Segmenter ({type(model.model.segmenter).__name__}) does not "
+                f"implement CachableBackbone. DBCache disabled.",
+                callback=rank_zero_info,
+            )
+        else:
+            cacher = DBCacheSegmenter(
+                model.model.segmenter,
+                fn_blocks=cache_fn_blocks,
+                threshold=cache_threshold,
+                warmup_steps=cache_warmup_steps,
+            ).install_into(model)
+            model._dbcache = cacher
+            cache_installed = True
+            logging.info(
+                f"DBCache enabled: fn_blocks={cache_fn_blocks}, "
+                f"threshold={cache_threshold}, warmup_steps={cache_warmup_steps}",
+                callback=rank_zero_info,
+            )
+    try:
+        module = InferenceModule(model=model, config=config)
+        trainer = lightning.pytorch.Trainer(
+            precision=precision,
+            logger=False,
+            enable_checkpointing=False,
+            callbacks=callbacks,
+        )
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            prefetch_factor=2 if num_workers > 0 else None,
+            shuffle=False,
+            persistent_workers=num_workers > 0,
+            collate_fn=dataset.collate if hasattr(dataset, "collate") else None,
+        )
+        if mode == "predict":
+            trainer.predict(module, dataloader)
+        elif mode == "evaluate":
+            trainer.test(module, dataloader)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+    finally:
+        if cache_installed:
+            _report_and_uninstall_cache(model)
