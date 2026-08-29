@@ -246,23 +246,23 @@ At inference time, the model performs $K$ denoising steps. The algorithm accepts
 
 $$
 \begin{aligned}
-&\text{Input: } h^{(s)} \in \mathbb{R}^{T \times d},\mkern5mu \text{mask} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \text{language}\char95\text{id},\mkern5mu K,\mkern5mu b_\text{known} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \tau,\mkern5mu \rho \cr
+&\text{Input: } h^{(s)} \in \mathbb{R}^{T \times d},\mkern5mu \text{mask} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \verb|language_id|,\mkern5mu K,\mkern5mu b_\text{known} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \tau,\mkern5mu \rho \cr
 &\text{Output: } b \in \lbrace{}0,1\rbrace{}^T \cr
 &b \leftarrow b_\text{known} \cr
 &\Delta t \leftarrow 1 / K \cr
 &\textbf{for } i = 0, \dots, K-1 \textbf{ do} \cr
 &\quad t \leftarrow i \cdot \Delta t \cr
 &\quad p \leftarrow (1 + \cos(t\pi)) / 2 \cr
-&\quad b \leftarrow \text{remove}\char95\text{mutable}(b,\mkern5mu b_\text{known},\mkern5mu p) \quad \text{(\S4.5)} \cr
+&\quad b \leftarrow \verb|remove_mutable|(b,\mkern5mu b_\text{known},\mkern5mu p) \quad \text{(\S4.5)} \cr
 &\quad r \leftarrow \text{cumsum}(b) + 1 \cr
-&\quad \ell \leftarrow \text{Segmenter}(h^{(s)},\mkern5mu r,\mkern5mu t,\mkern5mu \text{language}\char95\text{id}) \cr
-&\quad b \leftarrow \text{soft}\char95\text{boundary}\char95\text{decode}(\sigma(\ell),\mkern5mu \text{barriers}{=}b_\text{known},\mkern5mu \tau,\mkern5mu \rho) \cr
+&\quad \ell \leftarrow \text{Segmenter}(h^{(s)},\mkern5mu r,\mkern5mu t,\mkern5mu \verb|language_id|) \cr
+&\quad b \leftarrow \verb|soft_boundary_decode|(\sigma(\ell),\mkern5mu \text{barriers}{=}b_\text{known},\mkern5mu \tau,\mkern5mu \rho) \cr
 &\textbf{end for} \cr
 &\textbf{return } b
 \end{aligned}
 $$
 
-When $b_\text{known} = \mathbf{0}$ (no external boundaries provided), the algorithm reduces to standard unconditional generation: $\text{remove}\char95\text{mutable}$ behaves as uniform removal and no barriers constrain the decoder.
+When $b_\text{known} = \mathbf{0}$ (no external boundaries provided), the algorithm reduces to standard unconditional generation: $\verb|remove_mutable|$ behaves as uniform removal and no barriers constrain the decoder.
 
 The key insight is that at each step, the current boundary prediction is *re-noised* by randomly removing boundaries according to the schedule, then the model *re-predicts* all boundaries. This process gradually refines the boundary positions: early steps (high $p$, low $t$) remove many boundaries, forcing the model to make coarse structural decisions; later steps (low $p$, high $t$) preserve most boundaries, allowing fine-grained adjustment. The stochastic removal of *predicted* boundaries at each step implements a form of self-consistency regularization.
 
@@ -325,10 +325,10 @@ Each note region is represented by one learnable *pool token* — a learned embe
 The cross-stream attention mask restricts each pool token to attend only to frames within its corresponding region:
 
 $$
-\text{AttnMask}[i, j] = \begin{cases} 1 & \text{if same}\char95\text{stream}(i, j) \lor \text{same}\char95\text{region}(i, j) \cr 0 & \text{otherwise} \end{cases}
+\text{AttnMask}[i, j] = \begin{cases} 1 & \text{if }\verb|same_stream|(i, j) \lor \verb|same_region|(i, j) \cr 0 & \text{otherwise} \end{cases}
 $$
 
-where $\text{same}\char95\text{stream}(i, j)$ is true when tokens $i$ and $j$ belong to the same stream (both pool or both frame), and $\text{same}\char95\text{region}(i, j)$ holds when the region ID of token $i$ equals that of token $j$. Since all pool tokens can attend to each other via the same-stream rule, they can share information across regions — this is intentional, allowing the estimator to model inter-note dependencies such as relative pitch relationships. Optionally, a **soft region bias** replaces the hard mask with a learned distance penalty:
+where $\verb|same_stream|(i, j)$ is true when tokens $i$ and $j$ belong to the same stream (both pool or both frame), and $\verb|same_region|(i, j)$ holds when the region ID of token $i$ equals that of token $j$. Since all pool tokens can attend to each other via the same-stream rule, they can share information across regions — this is intentional, allowing the estimator to model inter-note dependencies such as relative pitch relationships. Optionally, a **soft region bias** replaces the hard mask with a learned distance penalty:
 
 $$
 \text{bias}(i, j) = -\alpha \cdot |r_i - r_j|
@@ -371,7 +371,7 @@ GAME uses three complementary loss terms, each targeting a different aspect of t
 ### 6.1 Regional Cosine Similarity Loss
 
 $$
-\mathcal{L}_\text{region} = 1 - \frac{\sum_{i,j} \text{sign}_{ij} \cdot \text{cos}\char95\text{sim}(x_i, x_j) \cdot \text{mask}_{ij}}{\sum_{i,j} \text{mask}_{ij}}
+\mathcal{L}_\text{region} = 1 - \frac{\sum_{i,j} \text{sign}_{ij} \cdot \verb|cos_sim|(x_i, x_j) \cdot \text{mask}_{ij}}{\sum_{i,j} \text{mask}_{ij}}
 $$
 
 where $x \in \mathbb{R}^{T \times 16}$ is an intermediate latent from the segmenter, and the sign and mask matrices are defined over frame pairs $(i, j)$:
