@@ -68,7 +68,7 @@ where $\gamma_1, \gamma_2, \gamma_3 \in \mathbb{R}^d$ are per-channel learnable 
 The PAC (Parallel Attention + Convolution) block runs self-attention and a convolutional MLP in parallel, then merges their outputs through a depthwise convolution:
 
 $$
-\text{PAC}(x) = \text{MergeConv}\big([\thinspace\text{Attn}(\text{Norm}_a(x)) \thickspace\Vert\thickspace \text{CgMLP}(\text{Norm}_c(x))\thinspace]\big)
+\text{PAC}(x) = \text{MergeConv}\big([\thinspace\text{Attn}(\text{Norm}_a(x)) \mkern5mu\Vert\mkern5mu \text{CgMLP}(\text{Norm}_c(x))\thinspace]\big)
 $$
 
 - **Self-Attention**: Multi-head scaled dot-product attention with RoPE.
@@ -125,7 +125,7 @@ $$
 \text{RoPE}(x, pos) = x \odot \cos(pos \cdot \Theta) + \text{rotate}(x) \odot \sin(pos \cdot \Theta)
 $$
 
-where $\Theta_k = 10000^{-2k/d}$ for $k = 0, \dots, d/2-1$. Both queries and keys receive the same transformation: $\text{RoPE}(q, k, pos) = (\text{RoPE}(q, pos),\thickspace \text{RoPE}(k, pos))$.
+where $\Theta_k = 10000^{-2k/d}$ for $k = 0, \dots, d/2-1$. Both queries and keys receive the same transformation: $\text{RoPE}(q, k, pos) = (\text{RoPE}(q, pos),\mkern5mu \text{RoPE}(k, pos))$.
 
 ### 3.3 JEBF Backbone
 
@@ -246,23 +246,23 @@ At inference time, the model performs $K$ denoising steps. The algorithm accepts
 
 $$
 \begin{aligned}
-&\text{Input: } h^{(s)} \in \mathbb{R}^{T \times d},\thickspace \text{mask} \in \lbrace{}0,1\rbrace{}^T,\thickspace \text{language\textunderscore{}id},\thickspace K,\thickspace b_\text{known} \in \lbrace{}0,1\rbrace{}^T,\thickspace \tau,\thickspace \rho \cr
+&\text{Input: } h^{(s)} \in \mathbb{R}^{T \times d},\mkern5mu \text{mask} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \text{language}\char95\text{id},\mkern5mu K,\mkern5mu b_\text{known} \in \lbrace{}0,1\rbrace{}^T,\mkern5mu \tau,\mkern5mu \rho \cr
 &\text{Output: } b \in \lbrace{}0,1\rbrace{}^T \cr
 &b \leftarrow b_\text{known} \cr
 &\Delta t \leftarrow 1 / K \cr
 &\textbf{for } i = 0, \dots, K-1 \textbf{ do} \cr
 &\quad t \leftarrow i \cdot \Delta t \cr
 &\quad p \leftarrow (1 + \cos(t\pi)) / 2 \cr
-&\quad b \leftarrow \text{remove\textunderscore{}mutable}(b,\thickspace b_\text{known},\thickspace p) \quad \text{(\S4.5)} \cr
+&\quad b \leftarrow \text{remove}\char95\text{mutable}(b,\mkern5mu b_\text{known},\mkern5mu p) \quad \text{(\S4.5)} \cr
 &\quad r \leftarrow \text{cumsum}(b) + 1 \cr
-&\quad \ell \leftarrow \text{Segmenter}(h^{(s)},\thickspace r,\thickspace t,\thickspace \text{language\textunderscore{}id}) \cr
-&\quad b \leftarrow \text{soft\textunderscore{}boundary\textunderscore{}decode}(\sigma(\ell),\thickspace \text{barriers}{=}b_\text{known},\thickspace \tau,\thickspace \rho) \cr
+&\quad \ell \leftarrow \text{Segmenter}(h^{(s)},\mkern5mu r,\mkern5mu t,\mkern5mu \text{language}\char95\text{id}) \cr
+&\quad b \leftarrow \text{soft}\char95\text{boundary}\char95\text{decode}(\sigma(\ell),\mkern5mu \text{barriers}{=}b_\text{known},\mkern5mu \tau,\mkern5mu \rho) \cr
 &\textbf{end for} \cr
 &\textbf{return } b
 \end{aligned}
 $$
 
-When $b_\text{known} = \mathbf{0}$ (no external boundaries provided), the algorithm reduces to standard unconditional generation: $\text{remove\textunderscore{}mutable}$ behaves as uniform removal and no barriers constrain the decoder.
+When $b_\text{known} = \mathbf{0}$ (no external boundaries provided), the algorithm reduces to standard unconditional generation: $\text{remove}\char95\text{mutable}$ behaves as uniform removal and no barriers constrain the decoder.
 
 The key insight is that at each step, the current boundary prediction is *re-noised* by randomly removing boundaries according to the schedule, then the model *re-predicts* all boundaries. This process gradually refines the boundary positions: early steps (high $p$, low $t$) remove many boundaries, forcing the model to make coarse structural decisions; later steps (low $p$, high $t$) preserve most boundaries, allowing fine-grained adjustment. The stochastic removal of *predicted* boundaries at each step implements a form of self-consistency regularization.
 
@@ -292,7 +292,7 @@ $$
 **Mutable-aware boundary removal**: Given a set of *immutable* boundaries (e.g., known word boundaries from forced alignment that must not be destroyed), removal is restricted to the remaining mutable subset. To keep the expected number of surviving boundaries consistent regardless of how many are immutable, the removal probability is scaled:
 
 $$
-P_\text{adj} = \min\negthinspace\left(1,\thickspace \frac{n \cdot p}{m}\right)
+P_\text{adj} = \min\negthinspace\left(1,\mkern5mu \frac{n \cdot p}{m}\right)
 $$
 
 where $n$ is the total boundary count, $m$ the mutable count, and $p$ the target removal rate. Each mutable boundary is then independently removed with probability $P_\text{adj}$. When $m = 0$ (all boundaries are immutable), no removal is performed.
@@ -325,10 +325,10 @@ Each note region is represented by one learnable *pool token* — a learned embe
 The cross-stream attention mask restricts each pool token to attend only to frames within its corresponding region:
 
 $$
-\text{AttnMask}[i, j] = \begin{cases} 1 & \text{if same\textunderscore{}stream}(i, j) \lor \text{same\textunderscore{}region}(i, j) \cr 0 & \text{otherwise} \end{cases}
+\text{AttnMask}[i, j] = \begin{cases} 1 & \text{if same}\char95\text{stream}(i, j) \lor \text{same}\char95\text{region}(i, j) \cr 0 & \text{otherwise} \end{cases}
 $$
 
-where $\text{same\textunderscore{}stream}(i, j)$ is true when tokens $i$ and $j$ belong to the same stream (both pool or both frame), and $\text{same\textunderscore{}region}(i, j)$ holds when the region ID of token $i$ equals that of token $j$. Since all pool tokens can attend to each other via the same-stream rule, they can share information across regions — this is intentional, allowing the estimator to model inter-note dependencies such as relative pitch relationships. Optionally, a **soft region bias** replaces the hard mask with a learned distance penalty:
+where $\text{same}\char95\text{stream}(i, j)$ is true when tokens $i$ and $j$ belong to the same stream (both pool or both frame), and $\text{same}\char95\text{region}(i, j)$ holds when the region ID of token $i$ equals that of token $j$. Since all pool tokens can attend to each other via the same-stream rule, they can share information across regions — this is intentional, allowing the estimator to model inter-note dependencies such as relative pitch relationships. Optionally, a **soft region bias** replaces the hard mask with a learned distance penalty:
 
 $$
 \text{bias}(i, j) = -\alpha \cdot |r_i - r_j|
@@ -371,13 +371,13 @@ GAME uses three complementary loss terms, each targeting a different aspect of t
 ### 6.1 Regional Cosine Similarity Loss
 
 $$
-\mathcal{L}_\text{region} = 1 - \frac{\sum_{i,j} \text{sign}_{ij} \cdot \text{cos\textunderscore{}sim}(x_i, x_j) \cdot \text{mask}_{ij}}{\sum_{i,j} \text{mask}_{ij}}
+\mathcal{L}_\text{region} = 1 - \frac{\sum_{i,j} \text{sign}_{ij} \cdot \text{cos}\char95\text{sim}(x_i, x_j) \cdot \text{mask}_{ij}}{\sum_{i,j} \text{mask}_{ij}}
 $$
 
 where $x \in \mathbb{R}^{T \times 16}$ is an intermediate latent from the segmenter, and the sign and mask matrices are defined over frame pairs $(i, j)$:
 
 $$
-\text{sign}_{ij} = \begin{cases} +1 & \text{if } r_i = r_j \quad \text{(same region: positive pull)} \cr -\exp\big(1 - |r_i - r_j|\big) & \text{if } r_i \neq r_j \thickspace\text{and}\thickspace |r_i - r_j| \leq w \quad \text{(nearby different: negative push)} \cr 0 & \text{otherwise (masked out)} \end{cases}
+\text{sign}_{ij} = \begin{cases} +1 & \text{if } r_i = r_j \quad \text{(same region: positive pull)} \cr -\exp\big(1 - |r_i - r_j|\big) & \text{if } r_i \neq r_j \mkern5mu\text{and}\mkern5mu |r_i - r_j| \leq w \quad \text{(nearby different: negative push)} \cr 0 & \text{otherwise (masked out)} \end{cases}
 $$
 
 $$
@@ -391,7 +391,7 @@ This is a **contrastive loss** operating on the segmenter's internal representat
 ### 6.2 Gaussian Soft Boundary Loss
 
 $$
-\mathcal{L}_\text{boundary} = \text{BCEWithLogits}\big(\ell,\thickspace b_\text{soft}\big)
+\mathcal{L}_\text{boundary} = \text{BCEWithLogits}\big(\ell,\mkern5mu b_\text{soft}\big)
 $$
 
 where $\ell \in \mathbb{R}^T$ are the boundary logits and $\text{soften}(\cdot)$ applies a Gaussian blur to the ground-truth binary boundaries with kernel width $\sigma_b = 1.0$:
@@ -408,7 +408,7 @@ This softening acknowledges the inherent ambiguity in boundary localization: a b
 ### 6.3 Gaussian Blurred Bins Loss
 
 $$
-\mathcal{L}_\text{note} = \text{BCEWithLogits}\big(\ell^\text{note},\thickspace \text{blur}(p_0, v_0)\big)
+\mathcal{L}_\text{note} = \text{BCEWithLogits}\big(\ell^\text{note},\mkern5mu \text{blur}(p_0, v_0)\big)
 $$
 
 where $\ell^\text{note} \in \mathbb{R}^{N \times 257}$ are per-note logits over $K = 257$ uniformly spaced bins covering MIDI range $[0, 128]$. The target is constructed by placing a Gaussian kernel at the ground-truth pitch value:
@@ -486,7 +486,7 @@ This is equivalent to a weighted average of per-sample mean distances, with each
 **Quantity Error Rate (QER)** — measures the discrepancy in region count. A boundary $\hat{b}_i$ is a true positive if there exists a ground-truth boundary $b_j$ within tolerance $\tau = 5$ frames ($\pm 50$ ms) such that they are mutual nearest neighbors:
 
 $$
-\text{TP}(i) \iff \exists j: |i - j| \leq \tau \thickspace\land\thickspace \text{NN}(\hat{b}, i) = j \thickspace\land\thickspace \text{NN}(b, j) = i
+\text{TP}(i) \iff \exists j: |i - j| \leq \tau \mkern5mu\land\mkern5mu \text{NN}(\hat{b}, i) = j \mkern5mu\land\mkern5mu \text{NN}(b, j) = i
 $$
 
 False positives $\text{FP} = |\hat{b}| - \text{TP}$ are unmatched predicted boundaries, and false negatives $\text{FN} = |b| - \text{TP}$ are unmatched ground-truth boundaries. Since $k$ explicit boundaries partition a sample into $k + 1$ regions, the total number of regions across all $B$ samples is $\sum_s (|b_s| + 1) = |b| + B$. Using this region count as the reference:
@@ -528,17 +528,17 @@ $$
 **Overall Accuracy (OA)** — fraction of all frames where both the presence decision is correct and (for voiced frames) the pitch is within tolerance:
 
 $$
-\text{OA} = \frac{1}{T} \sum_t \Big( (\hat{v}_t = v_t) \thickspace\land\thickspace \big( \neg v_t \thickspace\lor\thickspace |\hat{p}_t - p_t| \leq \delta \big) \Big)
+\text{OA} = \frac{1}{T} \sum_t \Big( (\hat{v}_t = v_t) \mkern5mu\land\mkern5mu \big( \neg v_t \mkern5mu\lor\mkern5mu |\hat{p}_t - p_t| \leq \delta \big) \Big)
 $$
 
 This is the most comprehensive single metric, requiring correctness on both the discrete voiced/unvoiced decision and the continuous pitch value.
 
 ### 8.3 Note-Level Overlap Metrics
 
-Each note is modeled as a rectangle in time–pitch space: spanning its full duration in the time dimension and $[p - w/2,\thickspace p + w/2]$ in the pitch dimension, where $w = 0.5$ semitones is the overlap width. The overlap between predicted and ground-truth note sets is:
+Each note is modeled as a rectangle in time–pitch space: spanning its full duration in the time dimension and $[p - w/2,\mkern5mu p + w/2]$ in the pitch dimension, where $w = 0.5$ semitones is the overlap width. The overlap between predicted and ground-truth note sets is:
 
 $$
-O = \sum_t \big( \hat{v}_t \land v_t \big) \cdot \max\big(0,\thickspace w - |\hat{p}_t - p_t|\big)
+O = \sum_t \big( \hat{v}_t \land v_t \big) \cdot \max\big(0,\mkern5mu w - |\hat{p}_t - p_t|\big)
 $$
 
 **Overlap Precision/Recall** — the ratio of overlapping area to total predicted/target area:
