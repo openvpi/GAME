@@ -40,6 +40,9 @@ def format_boundaries(
         timestep: float,
 ) -> Tensor:
     boundary_indices = durations.cumsum(dim=1).div(timestep).round().long().unsqueeze(1)  # [B, 1, N]
+    # CUDA ONNX Runtime cannot reduce an empty axis. The -1 sentinel never matches
+    # a frame, so fewer than two durations still produce no interior boundaries.
+    boundary_indices = F.pad(boundary_indices[..., :-1], (0, 1), value=-1)
     indices = torch.arange(length, dtype=torch.long, device=durations.device)[None, ..., None]  # [1, T, 1]
-    boundaries = (indices == boundary_indices[..., :-1]).any(dim=2)  # [B, T]
+    boundaries = (indices == boundary_indices).any(dim=2)  # [B, T]
     return boundaries
