@@ -64,6 +64,9 @@ def decode_soft_boundaries(
     if barriers is not None:
         boundaries = torch.masked_fill(boundaries, barriers, float("+inf"))
     maxima = find_local_extremum(boundaries, threshold=threshold, radius=radius, maxima=True)
+    if barriers is not None:
+        # Preset boundaries must survive ties with nearby barriers and padding.
+        maxima = maxima | barriers
     if mask is not None:
         maxima = maxima & mask
     return maxima
@@ -100,6 +103,8 @@ def decode_boundaries_from_velocities(
     if barriers is not None:
         distances = torch.masked_fill(distances, barriers, float("-inf"))
     boundaries = find_local_extremum(distances, threshold=threshold, radius=radius, maxima=False)  # [..., T]
+    if barriers is not None:
+        boundaries = boundaries | barriers
     if mask is not None:
         boundaries = boundaries & mask
     return boundaries
